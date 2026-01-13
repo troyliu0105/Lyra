@@ -1,0 +1,13 @@
+# DoL-Lyra 构建工具依赖
+
+# 网络请求
+requests>=2.32.5
+
+# 进度条显示
+tqdm>=4.67.1
+
+# 类型检查（可选）
+typing-extensions>=4.15.0
+
+# 表格写入
+pytablewriter>=1.2.1

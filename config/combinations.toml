@@ -1,0 +1,15 @@
+# MOD 组合配置
+
+# 推荐的组合（优先显示）
+recommended = [3, 35, 514, 1026]
+
+# 白名单（额外添加的组合，即使不满足规则也会生成）
+whitelist = [770, 1282, 2306, 4354]
+
+# 黑名单（排除的组合）
+blacklist = []
+
+# Polyfill 配置
+[polyfill]
+enabled = true
+code = 3

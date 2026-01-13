@@ -1,0 +1,123 @@
+# MOD 功能定义
+# bit: 位标志值
+# required: 是否必选
+# depends_on: 依赖的功能ID列表
+# conflicts_with: 冲突的功能ID列表
+# skip: 是否跳过此功能（不生成包含此功能的组合）
+
+[[features]]
+id = "au-a"
+name = "AU-A"
+bit = 4096
+required = false
+skip = false
+depends_on = []
+conflicts_with = ["besc", "susato", "goose", "au-f", "au-m"]
+
+[[features]]
+id = "au-m"
+name = "AU-M"
+bit = 2048
+required = false
+skip = false
+depends_on = []
+conflicts_with = ["besc", "susato", "goose", "au-f", "au-a"]
+
+[[features]]
+id = "au-f"
+name = "AU-F"
+bit = 1024
+required = false
+skip = false
+depends_on = []
+conflicts_with = ["besc", "susato", "goose", "au-m", "au-a"]
+
+[[features]]
+id = "goose"
+name = "GOOSE"
+bit = 512
+required = false
+skip = false
+depends_on = []
+conflicts_with = ["besc", "susato", "au-f", "au-m", "au-a"]
+
+[[features]]
+id = "ucb"
+name = "UCB"
+bit = 256
+required = false
+skip = false
+depends_on = ["besc"]
+conflicts_with = []
+
+[[features]]
+id = "susato"
+name = "SUSATO"
+bit = 128
+required = false
+skip = true                                                # 跳过，不生成包含此功能的组合
+depends_on = []
+conflicts_with = ["besc", "goose", "au-f", "au-m", "au-a"]
+
+[[features]]
+id = "wax"
+name = "WAX"
+bit = 64
+required = false
+skip = true           # 跳过
+depends_on = ["besc"]
+conflicts_with = []
+
+[[features]]
+id = "hikari"
+name = "HIKARI"
+bit = 32
+required = false
+skip = false
+depends_on = ["besc"]
+conflicts_with = []
+
+[[features]]
+id = "kr"
+name = "KR特写"
+bit = 16
+required = false
+skip = true             # 跳过
+depends_on = ["besc"]
+conflicts_with = ["bj"]
+
+[[features]]
+id = "bj"
+name = "BJ特写"
+bit = 8
+required = false
+skip = true             # 跳过
+depends_on = ["besc"]
+conflicts_with = ["kr"]
+
+[[features]]
+id = "reserved"
+name = ""
+bit = 4
+required = false
+skip = true         # 保留位，跳过
+depends_on = []
+conflicts_with = []
+
+[[features]]
+id = "cheat_csd"
+name = "作弊CSD"
+bit = 2
+required = true     # 必选
+skip = false
+depends_on = []
+conflicts_with = []
+
+[[features]]
+id = "besc"
+name = "BESC"
+bit = 1
+required = false
+skip = false
+depends_on = []
+conflicts_with = ["susato", "goose", "au-f", "au-m", "au-a"]

@@ -1,0 +1,104 @@
+# 构建配置
+
+[urls]
+# 工具下载地址
+apktool = "https://github.com/iBotPeaches/Apktool/releases/download/v2.12.0/apktool_2.12.0.jar"
+uber_apk_signer = "https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar"
+
+# DOLP 基础 URL
+dolp_base = "https://gitgud.io/Frostberg/degrees-of-lewdity-plus/-/archive/master/degrees-of-lewdity-plus-master.tar.gz?path=imagepacks"
+
+# AU 系列资源
+au_f = "https://github.com/DoL-Lyra/assets/releases/download/assets/AUfemale.imgpack.zip"
+au_m = "https://github.com/DoL-Lyra/assets/releases/download/assets/AUmale.imgpack.zip"
+au_a = "https://github.com/DoL-Lyra/assets/releases/download/assets/AUandrogynous.imgpack.zip"
+
+[paths]
+# 补丁文件路径
+android_save_patch = "patches/0001-dol-android-save-to-file.patch"
+
+# 工作目录
+workspace = "workspace"
+output = "output"
+
+# 子目录（相对于 workspace）
+extract = "extract"
+temp = "temp"
+signed = "signed"
+base = "base"
+prepare_package = "prepare_package"
+
+[github]
+# GitHub 发布配置
+owner = "sakarie9"
+repo = "DoL-Lyra"
+
+# APK 包名替换规则
+[[apk.replacements]]
+file = "AndroidManifest.xml"
+pattern = '"com.vrelnir.dol"'
+replacement = '"com.vrelnir.dol.lyra"'
+
+[[apk.replacements]]
+file = "AndroidManifest.xml"
+pattern = '"com.vrelnir.dol_debug"'
+replacement = '"com.vrelnir.dol.lyra"'
+
+[[apk.replacements]]
+file = "AndroidManifest.xml"
+pattern = '"com.vrelnir.dol.androidx-startup"'
+replacement = '"com.vrelnir.dol.lyra.androidx-startup"'
+
+[[apk.replacements]]
+file = "AndroidManifest.xml"
+pattern = '"com.vrelnir.dol_debug.androidx-startup"'
+replacement = '"com.vrelnir.dol.lyra.androidx-startup"'
+
+[[apk.replacements]]
+file = "res/values/strings.xml"
+pattern = "DoL"
+replacement = "DoL Lyra"
+
+[[apk.replacements]]
+file = "res/values/strings.xml"
+pattern = "Degrees of Lewdity"
+replacement = "DoL Lyra"
+
+[[apk.replacements]]
+file = "assets/www/index.html"
+pattern = "saveAs("
+replacement = "cordova.plugins.saveDialog.saveFile("
+
+# 图片包配置
+[imagepacks.besc]
+name = "besc"
+urls = [
+    "{dolp_base}/dolp",
+    "{dolp_base}/b3s",
+    "{dolp_base}/kaervek",
+    "{dolp_base}/dolp_b3s",
+]
+
+[imagepacks.besc.case_fixes]
+"img/hair/fringe/Messy curls" = "img/hair/fringe/messy curls"
+"img/hair/sides/messy ponytail/Shoulder.png" = "img/hair/sides/messy ponytail/shoulder.png"
+
+[imagepacks.hikari]
+name = "hikari"
+urls = ["{dolp_base}/b3s_hikfem", "{dolp_base}/b3s_hikfemsubs"]
+files_to_remove = [
+    "img/hair/fringe/Messy curls",
+    "img/clothes/face/foxmask/Full.png",
+]
+
+[imagepacks.goose]
+name = "goose"
+urls = ["{dolp_base}/dolp", "{dolp_base}/goosefem", "{dolp_base}/goosefemsubs"]
+
+[imagepacks.ucb]
+name = "ucb"
+urls = ["{dolp_base}/mysterious"]
+files_to_remove = [
+    "img/sex/missionary/active/virginkiller/chest.png",
+    "img/sex/missionary/active/virginkiller/waist.png",
+]
