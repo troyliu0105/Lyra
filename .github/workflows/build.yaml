@@ -36,13 +36,13 @@ jobs:
       - name: Install APT packages
         run: sudo apt install -y unrar
 
-      # 使用Python脚本处理游戏包
+      # 下载并预处理游戏资源
       - name: Prepare game packages
         run: |
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            python scripts/ci.py prepare-package --workspace "${{ github.workspace }}" --tag "${{ github.ref_name }}" -v
+            python main.py prepare --workspace "${{ github.workspace }}" --tag "${{ github.ref_name }}" -v
           else
-            python scripts/ci.py prepare-package --workspace "${{ github.workspace }}" -v
+            python main.py prepare --workspace "${{ github.workspace }}" -v
           fi
 
       - name: Setup signing key
@@ -50,13 +50,18 @@ jobs:
           echo ${{ secrets.SIGNING_KEY }} > dol.base64
           base64 -d dol.base64 > dol.jks
 
+      # 预热美化资源
+      - name: Warmup beautify resources
+        run: |
+          python main.py warmup --workspace "${{ github.workspace }}" -v
+
       # 并行构建所有组合
       - name: Build all combinations
         run: |
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            python scripts/ci.py build-all-parallel --workspace "${{ github.workspace }}" --tag "${{ github.ref_name }}" --jobs 4 -v
+            python main.py build --workspace "${{ github.workspace }}" --tag "${{ github.ref_name }}" --jobs 4 -v
           else
-            python scripts/ci.py build-all-parallel --workspace "${{ github.workspace }}" --jobs 4 -v
+            python main.py build --workspace "${{ github.workspace }}" --jobs 4 -v
           fi
 
       - name: List outputs
@@ -121,7 +126,7 @@ jobs:
       - name: Generate download page
         run: |
           VERSION=${{ github.ref_name }}
-          python scripts/ci.py generate-page --version "$VERSION" --output "$VERSION".md -v
+          python main.py page --version "$VERSION" --output "$VERSION".md -v
           cat "$VERSION".md
 
       - name: Clone hub repository

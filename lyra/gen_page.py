@@ -19,9 +19,15 @@ except ImportError:
 
 from .combo import CombinationCalculator, ModCombination
 from .config_loader import load_build_config
-from .beautify import VersionInfo, load_version_info
+from .version import VersionInfo, VersionRegistry
 
 logger = logging.getLogger(__name__)
+
+
+def load_version_info(path: Path) -> list[VersionInfo]:
+    """加载版本信息（兼容旧接口）"""
+    registry = VersionRegistry.load(path)
+    return list(registry)
 
 
 @dataclass
@@ -58,14 +64,15 @@ class DownloadPageConfig:
 
         # 解析版本号，例如 v0.5.7.9-5.0.2a-0112
         if not self.base_game_version or not self.chs_version or not self.date_suffix:
-            parts = self.version.lstrip("v").split("-")
-            if len(parts) >= 3:
-                if not self.base_game_version:
-                    self.base_game_version = parts[0]
-                if not self.chs_version:
-                    self.chs_version = parts[1]
-                if not self.date_suffix:
-                    self.date_suffix = parts[2]
+            if self.version:
+                parts = self.version.lstrip("v").split("-")
+                if len(parts) >= 3:
+                    if not self.base_game_version:
+                        self.base_game_version = parts[0]
+                    if not self.chs_version:
+                        self.chs_version = parts[1]
+                    if not self.date_suffix:
+                        self.date_suffix = parts[2]
 
         # 如果指定了版本文件，加载版本信息
         if self.versions_file and not self.version_info:
@@ -287,6 +294,10 @@ class DownloadPageGenerator:
         else:
             lines.append(self.generate_table_simple(all_combinations))
 
+        # 添加版本信息表格
+        if self.config.version_info:
+            lines.extend(self._generate_version_table())
+
         # 添加组合对照
         lines.extend(
             [
@@ -310,10 +321,6 @@ class DownloadPageGenerator:
                 "</details>",
             ]
         )
-
-        # 添加版本信息表格
-        if self.config.version_info:
-            lines.extend(self._generate_version_table())
 
         return "\n".join(lines)
 
@@ -342,7 +349,7 @@ class DownloadPageGenerator:
                     source_link = source
             else:
                 source_link = source
-            
+
             lines.append(f"| {v.name} | `{v.version}` | {source_link} |")
 
         lines.extend(

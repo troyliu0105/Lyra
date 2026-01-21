@@ -29,6 +29,7 @@ pairs/
 
 # Workspace directory (contains all temporary files)
 workspace/
+workspace
 
 # Build artifacts
 *.apk
