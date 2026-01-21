@@ -12,7 +12,7 @@ from pathlib import Path
 
 from lyra import __version__
 from lyra.config import BuildConfig, ModCode
-from lyra.builder import create_builder
+from lyra.builder import create_builder, BuildResult
 from lyra.combo import CombinationCalculator, get_default_build_codes
 from lyra.gen_page import generate_download_page
 from lyra.utils import setup_logging, find_game_file
@@ -153,7 +153,7 @@ def build_single(
     base_apk_dir: Path = None,
     dol_version: str = None,
     chs_version: str = None,
-) -> int:
+) -> BuildResult:
     """构建单个包
 
     Args:
@@ -165,6 +165,9 @@ def build_single(
         base_zip: 预处理的ZIP基包路径（CI模式）
         base_apk: 预处理的APK基包路径（需要解包）
         base_apk_dir: 已解包的APK目录路径（不需要解包）
+    
+    Returns:
+        BuildResult: 构建结果对象
     """
     # 解析MOD代码
     is_polyfill = False
@@ -178,7 +181,7 @@ def build_single(
         mod_code = int(mod_code_str)
     except ValueError:
         logger.error(f"无效的MOD代码: {mod_code_str}")
-        return 1
+        return BuildResult(success=False, error=f"无效的MOD代码: {mod_code_str}")
 
     # 创建配置
     config = BuildConfig(
@@ -207,7 +210,7 @@ def build_single(
 
         if not source_file or not source_file.exists():
             logger.error("未找到游戏文件")
-            return 1
+            return BuildResult(success=False, error="未找到游戏文件")
 
         logger.info(f"源文件: {source_file}")
     else:
@@ -225,10 +228,10 @@ def build_single(
         logger.info(f"  输出路径: {result.output_path}")
         if result.applied_mods:
             logger.info(f"  应用的MOD: {', '.join(result.applied_mods)}")
-        return 0
     else:
         logger.error(f"✗ 构建失败: {result.error}")
-        return 1
+    
+    return result
 
 
 def build_all(
@@ -249,7 +252,7 @@ def build_all(
 
         result = build_single(pack_type, code, date_param, output_dir, source_file)
 
-        if result == 0:
+        if result.success:
             success_count += 1
         else:
             fail_count += 1
@@ -299,7 +302,7 @@ def main():
         )
 
     # 单个构建
-    return build_single(
+    result = build_single(
         args.pack_type,
         args.mod_code,
         args.date,
@@ -311,6 +314,7 @@ def main():
         dol_version=args.dol_version,
         chs_version=args.chs_version,
     )
+    return 0 if result.success else 1
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import tarfile
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -296,11 +297,23 @@ def parse_version_from_filename(filename: str) -> tuple[str, str]:
     return dol_ver, chs_ver
 
 
+@dataclass
+class GitHubReleaseAsset:
+    """
+    GitHub Release 资源信息
+    """
+
+    url: str
+    name: str
+    tag: str
+    version: str  # 从文件名提取的版本号
+
+
 def get_github_release_asset(
     repo: str, asset_pattern: str, tag: str = "latest"
-) -> Optional[str]:
+) -> Optional[GitHubReleaseAsset]:
     """
-    从 GitHub Release 获取资源下载URL
+    从 GitHub Release 获取资源信息
 
     Args:
         repo: 仓库名称，格式为 "owner/repo"
@@ -308,7 +321,7 @@ def get_github_release_asset(
         tag: release tag，默认为 "latest" 获取最新版本
 
     Returns:
-        资源下载URL，未找到返回None
+        GitHubReleaseAsset 对象，未找到返回None
     """
     try:
         if tag == "latest":
@@ -321,6 +334,7 @@ def get_github_release_asset(
         response.raise_for_status()
 
         release_data = response.json()
+        release_tag = release_data.get("tag_name", tag)
         assets = release_data.get("assets", [])
 
         # 查找匹配的资源
@@ -328,12 +342,86 @@ def get_github_release_asset(
             name = asset.get("name", "")
             if asset_pattern in name:
                 download_url = asset.get("browser_download_url")
-                logger.debug(f"找到资源: {name} -> {download_url}")
-                return download_url
+                # 从文件名提取版本号（如 AUfemale.imgpack_v0.8.0.zip -> v0.8.0）
+                version = _extract_version_from_filename(name)
+                logger.debug(f"找到资源: {name} (version={version}) -> {download_url}")
+                return GitHubReleaseAsset(
+                    url=download_url,
+                    name=name,
+                    tag=release_tag,
+                    version=version,
+                )
 
         logger.warning(f"未找到匹配 '{asset_pattern}' 的资源")
         return None
 
     except Exception as e:
         logger.error(f"获取 GitHub Release 失败: {e}")
+        return None
+
+
+def _extract_version_from_filename(filename: str) -> str:
+    """
+    从文件名提取版本号
+
+    支持格式：
+    - AUfemale.imgpack_v0.8.0.zip -> v0.8.0
+    - mod_1.2.3.zip -> 1.2.3
+    - something-v2.0.0-beta.zip -> v2.0.0-beta
+
+    Args:
+        filename: 文件名
+
+    Returns:
+        版本号字符串，未找到返回 "unknown"
+    """
+    import re
+
+    # 匹配 v前缀的版本号：v0.8.0, v1.2.3-beta 等
+    match = re.search(r"[_-](v\d+\.\d+\.\d+[^.]*)\.zip", filename, re.IGNORECASE)
+    if match:
+        return match.group(1)
+
+    # 匹配无v前缀的版本号：1.2.3 等
+    match = re.search(r"[_-](\d+\.\d+\.\d+[^.]*)\.zip", filename, re.IGNORECASE)
+    if match:
+        return match.group(1)
+
+    return "unknown"
+
+
+def get_gitgud_commit_hash(repo: str, branch: str = "master") -> Optional[str]:
+    """
+    获取 GitGud 仓库的最新 commit hash
+
+    Args:
+        repo: 仓库路径，如 "Frostberg/degrees-of-lewdity-plus"
+        branch: 分支名，默认 "master"
+
+    Returns:
+        commit hash 的前7位，失败返回 None
+    """
+    try:
+        # GitGud API: https://gitgud.io/api/v4/projects/:id/repository/branches/:branch
+        # 需要将 / 编码为 %2F
+        encoded_repo = repo.replace("/", "%2F")
+        api_url = f"https://gitgud.io/api/v4/projects/{encoded_repo}/repository/branches/{branch}"
+        
+        logger.debug(f"获取 GitGud commit hash: {api_url}")
+        
+        response = requests.get(api_url, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        commit = data.get("commit", {})
+        full_hash = commit.get("id", "")
+        
+        if full_hash:
+            short_hash = full_hash[:7]
+            logger.debug(f"GitGud {repo} commit: {short_hash}")
+            return short_hash
+        
+        return None
+    except Exception as e:
+        logger.warning(f"获取 GitGud commit hash 失败: {e}")
         return None

@@ -24,6 +24,7 @@ from lyra.config import BuildConfig
 from lyra.config_loader import load_build_config
 from lyra.combo import CombinationCalculator
 from lyra.gen_page import generate_download_page
+from lyra.beautify import VersionInfo, save_version_info, load_version_info
 from lyra.utils import (
     setup_logging,
     download_file,
@@ -57,7 +58,9 @@ class FileLock:
             self.lock_fd.close()
 
 
-def build_single_task(task_args: Tuple) -> Tuple[str, str, bool, Optional[str]]:
+def build_single_task(
+    task_args: Tuple,
+) -> Tuple[str, str, bool, Optional[str], Optional[list]]:
     """
     单个构建任务（用于并行执行）
 
@@ -65,7 +68,7 @@ def build_single_task(task_args: Tuple) -> Tuple[str, str, bool, Optional[str]]:
         task_args: (pack_type, code, workspace, output_dir, date_param, dol_version, chs_version, verbose)
 
     Returns:
-        (pack_type, code, success, error_msg)
+        (pack_type, code, success, error_msg, version_info_dicts)
     """
     (
         pack_type,
@@ -83,6 +86,7 @@ def build_single_task(task_args: Tuple) -> Tuple[str, str, bool, Optional[str]]:
 
     # 加载配置
     from lyra.config_loader import load_build_config
+    from build import build_single
 
     build_config = load_build_config()
 
@@ -96,44 +100,35 @@ def build_single_task(task_args: Tuple) -> Tuple[str, str, bool, Optional[str]]:
     base_zip = base_dir / f"base{suffix}.zip"
     apk_dir = prepare_dir / f"apk{suffix}"
 
-    # 构造build.py参数
-    sys.argv = [
-        "build.py",
-        pack_type,
-        code,
-        "-o",
-        str(output_dir),
-    ]
-
-    if date_param:
-        sys.argv.insert(3, date_param)
-
-    if verbose:
-        sys.argv.append("-v")
-
-    # 添加基包路径
-    if pack_type == "zip" and base_zip.exists():
-        sys.argv.extend(["--base-zip", str(base_zip)])
-    elif pack_type == "apk" and apk_dir.exists():
-        sys.argv.extend(["--base-apk-dir", str(apk_dir)])
-
-    # 添加版本参数（如果指定了）
-    if dol_version:
-        sys.argv.extend(["--dol-version", dol_version])
-    if chs_version:
-        sys.argv.extend(["--chs-version", chs_version])
+    # 确定使用哪个基包
+    use_base_zip = base_zip if pack_type == "zip" and base_zip.exists() else None
+    use_base_apk_dir = apk_dir if pack_type == "apk" and apk_dir.exists() else None
 
     # 执行构建
     try:
-        from build import main as build_main
+        result = build_single(
+            pack_type=pack_type,
+            mod_code_str=code,
+            date_param=date_param,
+            output_dir=output_dir,
+            base_zip=use_base_zip,
+            base_apk_dir=use_base_apk_dir,
+            dol_version=dol_version,
+            chs_version=chs_version,
+        )
 
-        result = build_main()
-        if result == 0:
-            return (pack_type, code, True, None)
+        if result.success:
+            # 将版本信息转换为字典格式以便跨进程传输
+            version_dicts = (
+                [v.to_dict() for v in result.version_info]
+                if result.version_info
+                else None
+            )
+            return (pack_type, code, True, None, version_dicts)
         else:
-            return (pack_type, code, False, f"构建返回非零退出码: {result}")
+            return (pack_type, code, False, result.error, None)
     except Exception as e:
-        return (pack_type, code, False, str(e))
+        return (pack_type, code, False, str(e), None)
 
 
 def cmd_build(args):
@@ -182,7 +177,7 @@ def cmd_build(args):
 
 def download_assets_from_chs_repo(
     workspace: Path, lyra_ver: Optional[LyraVer] = None
-) -> dict:
+) -> tuple[dict, VersionInfo]:
     """
     从汉化仓库下载必要的资源文件
 
@@ -191,7 +186,7 @@ def download_assets_from_chs_repo(
         lyra_ver: 版本信息（可选，为None时使用latest release）
 
     Returns:
-        下载文件的路径字典
+        (下载文件的路径字典, 汉化仓库版本信息)
     """
     import urllib.request
 
@@ -214,6 +209,15 @@ def download_assets_from_chs_repo(
     except Exception as e:
         logger.error(f"获取release信息失败: {e}")
         raise
+
+    # 获取版本号
+    release_tag = release_data.get("tag_name", "unknown")
+    chs_version_info = VersionInfo(
+        name="汉化仓库",
+        version=release_tag,
+        source=chs_repo,
+    )
+    logger.info(f"汉化仓库版本: {release_tag}")
 
     # 定义需要下载的文件模式（排除polyfill.APK）
     required_patterns = [
@@ -259,7 +263,7 @@ def download_assets_from_chs_repo(
         download_file(asset_info["url"], dest_path)
         downloaded_files[key] = dest_path
 
-    return downloaded_files
+    return downloaded_files, chs_version_info
 
 
 def prepare_game_sources(
@@ -346,7 +350,7 @@ def _merge_image_pack(image_pack_dir: Path, target_dir: Path):
         logger.warning(f"在图片包中未找到img目录: {image_pack_dir}")
 
 
-def download_extra_mods(workspace: Path) -> dict:
+def download_extra_mods(workspace: Path) -> tuple[dict, list[VersionInfo]]:
     """
     从额外的仓库下载mod文件
 
@@ -354,7 +358,7 @@ def download_extra_mods(workspace: Path) -> dict:
         workspace: 工作目录
 
     Returns:
-        下载的mod文件路径字典
+        (下载的mod文件路径字典, 版本信息列表)
     """
     import urllib.request
 
@@ -365,6 +369,7 @@ def download_extra_mods(workspace: Path) -> dict:
     ]
 
     downloaded_mods = {}
+    version_infos = []
 
     for key, repo in extra_repos:
         api_url = f"https://api.github.com/repos/{repo}/releases/latest"
@@ -378,6 +383,9 @@ def download_extra_mods(workspace: Path) -> dict:
             logger.error(f"获取 {repo} release信息失败: {e}")
             continue
 
+        # 获取版本号
+        release_tag = release_data.get("tag_name", "unknown")
+
         # 查找mod.zip文件
         for asset in release_data.get("assets", []):
             name = asset["name"]
@@ -386,14 +394,24 @@ def download_extra_mods(workspace: Path) -> dict:
                 # 使用仓库名作为文件名前缀避免冲突
                 dest_name = f"{repo.split('/')[1]}.mod.zip"
                 dest_path = workspace / dest_name
-                logger.info(f"下载 {key}: {name} -> {dest_name}")
+                logger.info(f"下载 {key}: {name} ({release_tag}) -> {dest_name}")
                 download_file(url, dest_path)
                 downloaded_mods[key] = dest_path
+
+                # 记录版本信息
+                version_infos.append(
+                    VersionInfo(
+                        name=repo.split("/")[1],
+                        version=release_tag,
+                        source=repo,
+                        filename=name,
+                    )
+                )
                 break
         else:
             logger.warning(f"在 {repo} 中未找到mod.zip文件")
 
-    return downloaded_mods
+    return downloaded_mods, version_infos
 
 
 def _add_mods_to_html(html_path: Path, mod_paths: list):
@@ -494,16 +512,27 @@ def cmd_prepare_package(args):
     base_dir.mkdir(parents=True, exist_ok=True)
     prepare_dir.mkdir(parents=True, exist_ok=True)
 
+    # 收集所有版本信息
+    all_versions: list[VersionInfo] = []
+
     # ========== 1. 下载源文件 ==========
     logger.info("========== 下载源文件 ==========")
-    downloaded_files = download_assets_from_chs_repo(workspace, lyra_ver)
+    downloaded_files, chs_version = download_assets_from_chs_repo(workspace, lyra_ver)
+    all_versions.append(chs_version)
 
     if not downloaded_files:
         logger.error("未能下载任何文件")
         return 1
 
     # 下载额外的mod文件（Cheat, CombatStatusDisplay）
-    extra_mods = download_extra_mods(workspace)
+    extra_mods, mod_versions = download_extra_mods(workspace)
+    all_versions.extend(mod_versions)
+
+    # 打印版本信息
+    if all_versions:
+        logger.info("=== 资源版本信息汇总 ===")
+        for v in all_versions:
+            logger.info(f"  {v}")
 
     # ========== 2. 解压并合并图片包 ==========
     logger.info("========== 解压源文件 ==========")
@@ -628,6 +657,11 @@ def cmd_prepare_package(args):
             json.dump(base_names, f, indent=2)
         logger.info(f"基包名称映射已保存: {names_file}")
 
+    # 保存版本信息到文件
+    if all_versions:
+        versions_file = base_dir / "versions.json"
+        save_version_info(all_versions, versions_file)
+
     logger.info("========== 包处理完成 ==========")
     logger.info(f"  ZIP基包目录: {base_dir}")
     logger.info(f"  APK解包目录: {prepare_dir}")
@@ -661,6 +695,8 @@ def cmd_build_all(args):
     使用prepare-package生成的基包，批量构建所有组合。
     优先使用已解包的APK目录以提高速度。
     """
+    from build import build_single
+
     setup_logging(args.verbose)
 
     # 加载配置
@@ -713,6 +749,7 @@ def cmd_build_all(args):
 
     success_count = 0
     fail_count = 0
+    beautify_versions: list[VersionInfo] = []  # 收集美化包版本信息
 
     for pack_type in pack_types:
         for code in codes:
@@ -727,45 +764,60 @@ def cmd_build_all(args):
             logger.info(f"构建: {pack_type} {code}")
             logger.info(f"{'='*50}")
 
-            # 构造build.py参数
-            sys.argv = [
-                "build.py",
-                pack_type,
-                code,
-                "-o",
-                str(output_dir),
-            ]
-
-            if date_param:
-                sys.argv.insert(3, date_param)
-
-            if args.verbose:
-                sys.argv.append("-v")
-
-            # 添加基包路径
-            if pack_type == "zip" and base_zip.exists():
-                sys.argv.extend(["--base-zip", str(base_zip)])
-            elif pack_type == "apk" and apk_dir.exists():
-                sys.argv.extend(["--base-apk-dir", str(apk_dir)])
-
-            # 添加版本参数（如果指定了）
-            if dol_version:
-                sys.argv.extend(["--dol-version", dol_version])
-            if chs_version:
-                sys.argv.extend(["--chs-version", chs_version])
+            # 确定使用哪个基包
+            use_base_zip = (
+                base_zip if pack_type == "zip" and base_zip.exists() else None
+            )
+            use_base_apk_dir = (
+                apk_dir if pack_type == "apk" and apk_dir.exists() else None
+            )
 
             # 执行构建
             try:
-                from build import main as build_main
+                result = build_single(
+                    pack_type=pack_type,
+                    mod_code_str=code,
+                    date_param=date_param,
+                    output_dir=output_dir,
+                    base_zip=use_base_zip,
+                    base_apk_dir=use_base_apk_dir,
+                    dol_version=dol_version,
+                    chs_version=chs_version,
+                )
 
-                result = build_main()
-                if result == 0:
+                if result.success:
                     success_count += 1
+                    # 只从第一个成功的构建收集版本信息（所有构建使用相同的美化包）
+                    if not beautify_versions and result.version_info:
+                        beautify_versions = result.version_info
+                        logger.info(f"收集到 {len(beautify_versions)} 个美化包版本信息")
                 else:
                     fail_count += 1
             except Exception as e:
                 logger.error(f"构建失败: {e}")
                 fail_count += 1
+
+    # 合并 prepare 阶段和 build 阶段的版本信息
+    all_versions: list[VersionInfo] = []
+
+    # 加载 prepare 阶段的版本信息
+    prepare_versions_file = base_dir / "versions.json"
+    if prepare_versions_file.exists():
+        prepare_versions = load_version_info(prepare_versions_file)
+        all_versions.extend(prepare_versions)
+        logger.info(f"加载 prepare 阶段版本信息: {len(prepare_versions)} 个")
+
+    # 添加 build 阶段的美化包版本信息
+    all_versions.extend(beautify_versions)
+
+    # 保存合并后的版本信息
+    if all_versions:
+        final_versions_file = base_dir / "versions.json"
+        save_version_info(all_versions, final_versions_file)
+
+        logger.info("=== 资源版本信息汇总 ===")
+        for v in all_versions:
+            logger.info(f"  {v}")
 
     logger.info(f"\n{'='*50}")
     logger.info(f"批量构建完成: 成功 {success_count}, 失败 {fail_count}")
@@ -779,8 +831,10 @@ def cmd_build_all_parallel(args):
     并行构建所有MOD组合包
 
     使用进程池并行执行构建任务，显著提升构建速度。
-    自动处理并发问题：工作目录隔离、资源锁定、进程安全日志。
+    首先进行串行 zip 构建预热资源，然后并行构建 apk。
     """
+    from build import build_single
+
     setup_logging(args.verbose)
 
     # 加载配置
@@ -807,20 +861,13 @@ def cmd_build_all_parallel(args):
 
     if args.tag:
         # tag 格式: v0.5.7.9-5.0.2a-0112
-        tag_str = args.tag
-        if tag_str.startswith("v"):
-            tag_str = tag_str[1:]
-
-        parts = tag_str.split("-")
-        if len(parts) >= 3:
-            dol_version = parts[0]  # 0.5.7.9
-            chs_version = parts[1]  # 5.0.2a
-            date_param = parts[2]  # 0112
-            logger.info(
-                f"从tag解析版本: DoL={dol_version}, Chs={chs_version}, Date={date_param}"
-            )
-        else:
-            logger.warning(f"tag格式不正确: {args.tag}，应为 v0.5.7.9-5.0.2a-0112")
+        lyra_ver = extract_vers_from_string(args.tag)
+        dol_version = lyra_ver.dol_ver
+        chs_version = lyra_ver.chs_ver
+        date_param = lyra_ver.date
+        logger.info(
+            f"从tag解析版本: DoL={dol_version}, Chs={chs_version}, Date={date_param}"
+        )
 
     # 获取所有构建代码
     calculator = CombinationCalculator()
@@ -836,13 +883,61 @@ def cmd_build_all_parallel(args):
     else:
         pack_types = ["zip", "apk"]
 
-    # 构建任务列表
-    tasks = []
-    for pack_type in pack_types:
+    success_count = 0
+    fail_count = 0
+    beautify_versions: list[VersionInfo] = []
+
+    # ========== 阶段1: 串行构建 ZIP（预热资源） ==========
+    if "zip" in pack_types:
+        logger.info(f"{'='*50}")
+        logger.info("阶段1: 串行构建 ZIP（预热资源下载）")
+        logger.info(f"{'='*50}\n")
+
         for code in codes:
-            tasks.append(
+            is_polyfill = code.startswith("polyfill-")
+            suffix = "-polyfill" if is_polyfill else ""
+            base_zip = base_dir / f"base{suffix}.zip"
+
+            logger.info(f"构建: zip {code}")
+
+            try:
+                result = build_single(
+                    pack_type="zip",
+                    mod_code_str=code,
+                    date_param=date_param,
+                    output_dir=output_dir,
+                    base_zip=base_zip if base_zip.exists() else None,
+                    dol_version=dol_version,
+                    chs_version=chs_version,
+                )
+
+                if result.success:
+                    success_count += 1
+                    # 从第一个成功的构建收集版本信息
+                    if not beautify_versions and result.version_info:
+                        beautify_versions = result.version_info
+                        logger.info(f"收集到 {len(beautify_versions)} 个美化包版本信息")
+                else:
+                    fail_count += 1
+                    logger.error(f"构建失败: {result.error}")
+            except Exception as e:
+                fail_count += 1
+                logger.error(f"构建异常: {e}")
+
+        logger.info(f"\nZIP 构建完成: 成功 {success_count}, 失败 {fail_count}\n")
+
+    # ========== 阶段2: 并行构建 APK ==========
+    if "apk" in pack_types:
+        logger.info(f"{'='*50}")
+        logger.info("阶段2: 并行构建 APK")
+        logger.info(f"{'='*50}\n")
+
+        # 构建 APK 任务列表
+        apk_tasks = []
+        for code in codes:
+            apk_tasks.append(
                 (
-                    pack_type,
+                    "apk",
                     code,
                     workspace,
                     output_dir,
@@ -853,51 +948,84 @@ def cmd_build_all_parallel(args):
                 )
             )
 
-    # 确定并发数
-    max_workers = args.jobs if args.jobs else min(multiprocessing.cpu_count(), 4)
+        # 确定并发数
+        max_workers = args.jobs if args.jobs else min(multiprocessing.cpu_count(), 4)
 
-    logger.info(f"开始并行构建 {len(tasks)} 个任务，包类型: {pack_types}")
-    logger.info(f"并发进程数: {max_workers}")
-    logger.info(f"{'='*50}\n")
+        logger.info(f"并行构建 {len(apk_tasks)} 个 APK，并发进程数: {max_workers}")
+        logger.info(f"{'='*50}\n")
 
-    success_count = 0
-    fail_count = 0
-    completed = 0
+        apk_success = 0
+        apk_fail = 0
+        completed = 0
 
-    # 使用进程池执行并行构建
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        # 提交所有任务
-        future_to_task = {
-            executor.submit(build_single_task, task): task for task in tasks
-        }
+        # 使用进程池执行并行构建
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            future_to_task = {
+                executor.submit(build_single_task, task): task for task in apk_tasks
+            }
 
-        # 处理完成的任务
-        for future in as_completed(future_to_task):
-            task = future_to_task[future]
-            pack_type, code = task[0], task[1]
-            completed += 1
+            for future in as_completed(future_to_task):
+                task = future_to_task[future]
+                pack_type, code = task[0], task[1]
+                completed += 1
 
-            try:
-                result_pack_type, result_code, success, error_msg = future.result()
-
-                if success:
-                    success_count += 1
-                    logger.info(
-                        f"✓ [{completed}/{len(tasks)}] {result_pack_type} {result_code} - 成功"
+                try:
+                    result_pack_type, result_code, success, error_msg, version_dicts = (
+                        future.result()
                     )
-                else:
-                    fail_count += 1
+
+                    if success:
+                        apk_success += 1
+                        logger.info(
+                            f"✓ [{completed}/{len(apk_tasks)}] {result_pack_type} {result_code} - 成功"
+                        )
+                        # 如果还没收集版本信息，从 APK 构建中收集
+                        if not beautify_versions and version_dicts:
+                            beautify_versions = [
+                                VersionInfo.from_dict(vd) for vd in version_dicts
+                            ]
+                            logger.info(
+                                f"收集到 {len(beautify_versions)} 个美化包版本信息"
+                            )
+                    else:
+                        apk_fail += 1
+                        logger.error(
+                            f"✗ [{completed}/{len(apk_tasks)}] {result_pack_type} {result_code} - 失败: {error_msg}"
+                        )
+                except Exception as e:
+                    apk_fail += 1
                     logger.error(
-                        f"✗ [{completed}/{len(tasks)}] {result_pack_type} {result_code} - 失败: {error_msg}"
+                        f"✗ [{completed}/{len(apk_tasks)}] {pack_type} {code} - 异常: {e}"
                     )
-            except Exception as e:
-                fail_count += 1
-                logger.error(
-                    f"✗ [{completed}/{len(tasks)}] {pack_type} {code} - 异常: {e}"
-                )
+
+        success_count += apk_success
+        fail_count += apk_fail
+        logger.info(f"\nAPK 构建完成: 成功 {apk_success}, 失败 {apk_fail}\n")
+
+    # ========== 保存版本信息 ==========
+    all_versions: list[VersionInfo] = []
+
+    # 加载 prepare 阶段的版本信息
+    prepare_versions_file = base_dir / "versions.json"
+    if prepare_versions_file.exists():
+        prepare_versions = load_version_info(prepare_versions_file)
+        all_versions.extend(prepare_versions)
+        logger.info(f"加载 prepare 阶段版本信息: {len(prepare_versions)} 个")
+
+    # 添加 build 阶段的美化包版本信息
+    all_versions.extend(beautify_versions)
+
+    # 保存合并后的版本信息
+    if all_versions:
+        final_versions_file = base_dir / "versions.json"
+        save_version_info(all_versions, final_versions_file)
+
+        logger.info("=== 资源版本信息汇总 ===")
+        for v in all_versions:
+            logger.info(f"  {v}")
 
     logger.info(f"\n{'='*50}")
-    logger.info(f"并行构建完成: 成功 {success_count}, 失败 {fail_count}")
+    logger.info(f"全部构建完成: 成功 {success_count}, 失败 {fail_count}")
     logger.info(f"{'='*50}")
 
     return 0 if fail_count == 0 else 1
@@ -930,12 +1058,14 @@ def cmd_generate_page(args):
     setup_logging(args.verbose)
 
     output_path = Path(args.output) if args.output else None
+    versions_file = Path(args.versions_file) if args.versions_file else None
 
     content = generate_download_page(
         version=args.version,
         output_path=output_path,
         github_owner=args.github_owner,
         github_repo=args.github_repo,
+        versions_file=versions_file,
     )
 
     if not output_path:
@@ -1090,6 +1220,7 @@ def main():
     page_parser.add_argument("--output", help="输出文件路径")
     page_parser.add_argument("--github-owner", default="sakarie9", help="GitHub用户名")
     page_parser.add_argument("--github-repo", default="DoL-Lyra", help="GitHub仓库名")
+    page_parser.add_argument("--versions-file", help="版本信息文件路径")
     page_parser.add_argument("-v", "--verbose", action="store_true")
 
     # list-combinations 命令

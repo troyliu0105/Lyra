@@ -7,7 +7,7 @@
 import logging
 import shutil
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -19,9 +19,83 @@ from .utils import (
     copy_directory,
     safe_move,
     safe_remove,
+    get_gitgud_commit_hash,
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class VersionInfo:
+    """版本信息记录"""
+
+    name: str  # 资源名称
+    version: str  # 版本号
+    source: str = ""  # 来源（如 GitHub repo）
+    filename: str = ""  # 文件名
+
+    def __str__(self) -> str:
+        if self.version and self.version != "unknown":
+            return f"{self.name}: {self.version}"
+        return f"{self.name}: (no version)"
+
+    def to_dict(self) -> dict:
+        """转换为字典"""
+        return {
+            "name": self.name,
+            "version": self.version,
+            "source": self.source,
+            "filename": self.filename,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "VersionInfo":
+        """从字典创建"""
+        return cls(
+            name=data.get("name", ""),
+            version=data.get("version", ""),
+            source=data.get("source", ""),
+            filename=data.get("filename", ""),
+        )
+
+
+def save_version_info(versions: list[VersionInfo], path: Path) -> None:
+    """
+    保存版本信息到 JSON 文件
+
+    Args:
+        versions: 版本信息列表
+        path: 保存路径
+    """
+    import json
+
+    data = [v.to_dict() for v in versions]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    logger.info(f"版本信息已保存: {path}")
+
+
+def load_version_info(path: Path) -> list[VersionInfo]:
+    """
+    从 JSON 文件加载版本信息
+
+    Args:
+        path: 文件路径
+
+    Returns:
+        版本信息列表
+    """
+    import json
+
+    if not path.exists():
+        logger.warning(f"版本信息文件不存在: {path}")
+        return []
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    return [VersionInfo.from_dict(item) for item in data]
 
 
 class BeautifyHandler(ABC):
@@ -39,6 +113,7 @@ class BeautifyHandler(ABC):
         self.work_dir = work_dir
         self.img_path = img_path
         self.urls = urls
+        self._version_info: Optional[VersionInfo] = None
 
     @property
     @abstractmethod
@@ -52,6 +127,11 @@ class BeautifyHandler(ABC):
         """对应的MOD代码"""
         pass
 
+    @property
+    def version_info(self) -> Optional[VersionInfo]:
+        """获取版本信息"""
+        return self._version_info
+
     @abstractmethod
     def apply(self) -> bool:
         """
@@ -61,6 +141,10 @@ class BeautifyHandler(ABC):
             是否成功
         """
         pass
+
+    def _get_dolp_commit_hash(self) -> Optional[str]:
+        """获取 DoL+ 仓库的 commit hash"""
+        return get_gitgud_commit_hash("Frostberg/degrees-of-lewdity-plus", "master")
 
     def download_dolp_pack(self, pack_name: str, dest_dir: Path) -> Path:
         """
@@ -109,6 +193,15 @@ class BESCHandler(BeautifyHandler):
 
         beautify_dir = self.work_dir / "besc"
         beautify_dir.mkdir(parents=True, exist_ok=True)
+
+        # 获取 DoL+ commit hash 作为版本
+        commit_hash = self._get_dolp_commit_hash()
+        if commit_hash:
+            self._version_info = VersionInfo(
+                name="DoL+",
+                version=commit_hash,
+                source="gitgud.io/Frostberg/degrees-of-lewdity-plus",
+            )
 
         # 下载多个图片包
         packs = ["dolp", "b3s", "kaervek", "dolp_b3s"]
@@ -281,24 +374,32 @@ class AUHandler(BeautifyHandler):
         beautify_dir = self.work_dir / f"sideview_au_{self.variant[0]}"
         beautify_dir.mkdir(parents=True, exist_ok=True)
 
+        # 从 GitHub Release 获取最新版本信息
+        from .utils import get_github_release_asset
+
+        asset = get_github_release_asset(
+            self.urls.au_github_repo, self.asset_pattern, tag="mod"
+        )
+
+        if not asset:
+            logger.error(f"无法获取 {self.name} 的下载URL")
+            return False
+
+        # 记录版本信息（无论是否使用缓存都要记录）
+        self._version_info = VersionInfo(
+            name=self.name,
+            version=asset.version,
+            source=self.urls.au_github_repo,
+            filename=asset.name,
+        )
+
         # 检查是否已经解压过，避免重复解压
         if (beautify_dir / "body").exists():
             logger.debug(f"使用缓存的 {self.name} 文件")
         else:
-            # 从 GitHub Release 获取最新版本的下载URL
-            from .utils import get_github_release_asset
-
-            download_url = get_github_release_asset(
-                self.urls.au_github_repo, self.asset_pattern, tag="mod"
-            )
-
-            if not download_url:
-                logger.error(f"无法获取 {self.name} 的下载URL")
-                return False
-
             # 下载并解压
             zip_path = beautify_dir / "au_imgpack.zip"
-            download_file(download_url, zip_path, quiet=True)
+            download_file(asset.url, zip_path, quiet=True)
             logger.debug(f"解压 {self.name} 文件...")
             extract_zip(zip_path, beautify_dir)
             safe_remove(zip_path)
@@ -474,7 +575,7 @@ class BeautifyManager:
             self.work_dir, self.img_path, self.urls, "androgynous"
         )
 
-    def apply_mods(self, mod_code: ModCode) -> list[str]:
+    def apply_mods(self, mod_code: ModCode) -> tuple[list[str], list[VersionInfo]]:
         """
         应用指定的MOD
 
@@ -482,9 +583,10 @@ class BeautifyManager:
             mod_code: MOD代码（位标志组合）
 
         Returns:
-            应用的MOD名称列表
+            (应用的MOD名称列表, 版本信息列表)
         """
         applied = []
+        versions = []
 
         # 按照固定顺序处理MOD
         order = [
@@ -507,7 +609,29 @@ class BeautifyManager:
                     try:
                         if handler.apply():
                             applied.append(handler.name)
+                            # 收集版本信息
+                            if handler.version_info:
+                                versions.append(handler.version_info)
                     except Exception as e:
                         logger.error(f"应用美化失败 {handler.name}: {e}")
 
-        return applied
+        # 打印版本信息摘要
+        if versions:
+            logger.info("=== 美化资源版本信息 ===")
+            for v in versions:
+                logger.info(f"  {v}")
+
+        return applied, versions
+
+    def get_version_summary(self) -> dict[str, str]:
+        """
+        获取所有已应用美化的版本摘要
+
+        Returns:
+            {美化名称: 版本号} 字典
+        """
+        summary = {}
+        for handler in self._handlers.values():
+            if handler.version_info:
+                summary[handler.version_info.name] = handler.version_info.version
+        return summary

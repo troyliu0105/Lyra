@@ -4,7 +4,7 @@ Markdown 下载页面生成模块
 生成带有下载链接的 Markdown 表格。
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 from datetime import datetime, timezone
@@ -19,6 +19,7 @@ except ImportError:
 
 from .combo import CombinationCalculator, ModCombination
 from .config_loader import load_build_config
+from .beautify import VersionInfo, load_version_info
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,8 @@ class DownloadPageConfig:
     base_game_version: str = ""
     chs_version: str = ""
     date_suffix: str = ""
+    versions_file: Optional[Path] = None  # 版本信息文件路径
+    version_info: list[VersionInfo] = field(default_factory=list)  # 版本信息列表
 
     def __post_init__(self):
         """如果没有指定 GitHub 信息，从配置文件加载"""
@@ -63,6 +66,10 @@ class DownloadPageConfig:
                     self.chs_version = parts[1]
                 if not self.date_suffix:
                     self.date_suffix = parts[2]
+
+        # 如果指定了版本文件，加载版本信息
+        if self.versions_file and not self.version_info:
+            self.version_info = load_version_info(self.versions_file)
 
     @property
     def release_base_url(self) -> str:
@@ -304,7 +311,48 @@ class DownloadPageGenerator:
             ]
         )
 
+        # 添加版本信息表格
+        if self.config.version_info:
+            lines.extend(self._generate_version_table())
+
         return "\n".join(lines)
+
+    def _generate_version_table(self) -> list[str]:
+        """生成版本信息表格"""
+        lines = [
+            "",
+            "",
+            "<details>",
+            "",
+            "<summary>资源版本信息</summary>",
+            "",
+            "| 资源 | 版本 | 来源 |",
+            "|------|------|------|",
+        ]
+
+        for v in self.config.version_info:
+            source = v.source or "-"
+            # 如果来源是 GitHub/GitGud，生成链接
+            if "github.com" in source or "/" in source:
+                if "gitgud.io" in source:
+                    source_link = f"[{source}](https://{source})"
+                elif "/" in source and "http" not in source:
+                    source_link = f"[{source}](https://github.com/{source})"
+                else:
+                    source_link = source
+            else:
+                source_link = source
+            
+            lines.append(f"| {v.name} | `{v.version}` | {source_link} |")
+
+        lines.extend(
+            [
+                "",
+                "</details>",
+            ]
+        )
+
+        return lines
 
     def save(self, path: Optional[Path] = None):
         """
@@ -328,6 +376,7 @@ def generate_download_page(
     output_path: Optional[Path] = None,
     github_owner: str = "sakarie9",
     github_repo: str = "DoL-Lyra",
+    versions_file: Optional[Path] = None,
 ) -> str:
     """
     便捷函数：生成下载页面
@@ -337,6 +386,7 @@ def generate_download_page(
         output_path: 输出路径（可选）
         github_owner: GitHub 用户名
         github_repo: GitHub 仓库名
+        versions_file: 版本信息文件路径（可选）
 
     Returns:
         Markdown 内容
@@ -346,6 +396,7 @@ def generate_download_page(
         github_owner=github_owner,
         github_repo=github_repo,
         output_path=output_path,
+        versions_file=versions_file,
     )
 
     generator = DownloadPageGenerator(config)

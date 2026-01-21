@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import BuildConfig, ModCode, ResourceURLs
-from .beautify import BeautifyManager
+from .beautify import BeautifyManager, VersionInfo
 from .combo import CombinationCalculator
 from .utils import (
     download_file,
@@ -38,10 +38,13 @@ class BuildResult:
     output_name: str = ""
     error: Optional[str] = None
     applied_mods: list[str] = None
+    version_info: list[VersionInfo] = None
 
     def __post_init__(self):
         if self.applied_mods is None:
             self.applied_mods = []
+        if self.version_info is None:
+            self.version_info = []
 
 
 class PackageBuilder(ABC):
@@ -123,7 +126,7 @@ class PackageBuilder(ABC):
         tz = timezone(timedelta(hours=8))
         return datetime.now(tz).strftime("%m%d")
 
-    def _apply_beautify(self, img_path: Path) -> list[str]:
+    def _apply_beautify(self, img_path: Path) -> tuple[list[str], list[VersionInfo]]:
         """
         应用美化MOD
 
@@ -131,7 +134,7 @@ class PackageBuilder(ABC):
             img_path: 图片目录路径
 
         Returns:
-            应用的MOD名称列表
+            (应用的MOD名称列表, 版本信息列表)
         """
         manager = BeautifyManager(
             work_dir=self.config.temp_dir,
@@ -169,7 +172,9 @@ class ZipBuilder(PackageBuilder):
     @property
     def _work_dir(self) -> Path:
         """获取当前构建的工作目录（按pack_type和mod_code隔离）"""
-        return self.config.extract_dir / "zip" / str(self.config.mod_code)
+        # 如果是polyfill版本，在目录中加入polyfill标记
+        suffix = "-polyfill" if self.config.is_polyfill else ""
+        return self.config.extract_dir / "zip" / f"{self.config.mod_code}{suffix}"
 
     def _get_source_file(self, source_file: Path) -> Path:
         """获取实际使用的源文件（优先使用基包）"""
@@ -204,7 +209,7 @@ class ZipBuilder(PackageBuilder):
             extract_zip(actual_source, self._work_dir)
 
             # 应用美化
-            applied_mods = self._apply_beautify(self.img_path)
+            applied_mods, version_info = self._apply_beautify(self.img_path)
 
             # 生成输出文件名
             output_name = self.get_output_name(actual_source.stem)
@@ -223,6 +228,7 @@ class ZipBuilder(PackageBuilder):
                 output_path=output_path,
                 output_name=output_name,
                 applied_mods=applied_mods,
+                version_info=version_info,
             )
 
         except Exception as e:
@@ -247,7 +253,9 @@ class ApkBuilder(PackageBuilder):
     @property
     def _work_dir(self) -> Path:
         """获取当前构建的工作目录（按pack_type和mod_code隔离）"""
-        return self.config.extract_dir / "apk" / str(self.config.mod_code)
+        # 如果是polyfill版本，在目录中加入polyfill标记
+        suffix = "-polyfill" if self.config.is_polyfill else ""
+        return self.config.extract_dir / "apk" / f"{self.config.mod_code}{suffix}"
 
     def _download_tools(self):
         """下载APK处理工具"""
@@ -358,8 +366,9 @@ class ApkBuilder(PackageBuilder):
         """重新编译APK"""
         logger.info("重新编译APK...")
 
-        # 使用mod_code独立的临时文件，避免并发冲突
-        tmp_apk = self.config.workspace_dir / f"tmp_{self.config.mod_code}.apk"
+        # 使用mod_code和polyfill标记生成独立的临时文件，避免并发冲突
+        suffix = "-polyfill" if self.config.is_polyfill else ""
+        tmp_apk = self.config.workspace_dir / f"tmp_{self.config.mod_code}{suffix}.apk"
         run_command(
             [
                 "java",
@@ -378,8 +387,9 @@ class ApkBuilder(PackageBuilder):
         """签名APK"""
         logger.info("签名APK...")
 
-        # 使用mod_code独立的签名目录，避免并发冲突
-        signed_dir = self.config.workspace_dir / "signed" / str(self.config.mod_code)
+        # 使用mod_code和polyfill标记生成独立的签名目录，避免并发冲突
+        suffix = "-polyfill" if self.config.is_polyfill else ""
+        signed_dir = self.config.workspace_dir / "signed" / f"{self.config.mod_code}{suffix}"
         signed_dir.mkdir(parents=True, exist_ok=True)
 
         run_command(
@@ -439,7 +449,7 @@ class ApkBuilder(PackageBuilder):
             work_dir = self._prepare_work_dir(source_file, apktool_path)
 
             # 应用美化
-            applied_mods = self._apply_beautify(self.img_path)
+            applied_mods, version_info = self._apply_beautify(self.img_path)
 
             # 重新编译
             tmp_apk = self._recompile_apk(work_dir, apktool_path)
@@ -455,10 +465,11 @@ class ApkBuilder(PackageBuilder):
             # 移动到输出目录
             shutil.move(str(signed_apk), str(output_path))
 
-            # 清理临时文件（使用mod_code特定的路径）
+            # 清理临时文件（使用mod_code和polyfill特定的路径）
+            suffix = "-polyfill" if self.config.is_polyfill else ""
             safe_remove(tmp_apk)
             safe_remove(
-                self.config.workspace_dir / "signed" / str(self.config.mod_code)
+                self.config.workspace_dir / "signed" / f"{self.config.mod_code}{suffix}"
             )
             safe_remove(self._work_dir)
 
@@ -469,6 +480,7 @@ class ApkBuilder(PackageBuilder):
                 output_path=output_path,
                 output_name=output_name,
                 applied_mods=applied_mods,
+                version_info=version_info,
             )
 
         except Exception as e:
