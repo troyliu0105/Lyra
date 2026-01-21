@@ -134,6 +134,7 @@ jobs:
         with:
           repository: DoL-Lyra/hub
           path: hub-repo
+          token: ${{ secrets.GH_PAT_LYRA }}
 
       - name: Copy download page to hub
         run: |
