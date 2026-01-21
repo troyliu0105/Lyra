@@ -114,9 +114,7 @@ class BuildConfiguration:
     apktool_url: str
     uber_apk_signer_url: str
     dolp_base_url: str
-    au_f_url: str
-    au_m_url: str
-    au_a_url: str
+    au_github_repo: str
 
     # Paths
     workspace_dir: str
@@ -157,9 +155,7 @@ class BuildConfiguration:
             apktool_url=urls["apktool"],
             uber_apk_signer_url=urls["uber_apk_signer"],
             dolp_base_url=dolp_base,
-            au_f_url=urls["au_f"],
-            au_m_url=urls["au_m"],
-            au_a_url=urls["au_a"],
+            au_github_repo=urls.get("au_github_repo", "AOKIUTAGE/UTAGEsDOL3.0"),
             workspace_dir=paths["workspace"],
             output_dir=paths["output"],
             extract_dir=paths["extract"],

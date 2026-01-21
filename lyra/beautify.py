@@ -266,12 +266,14 @@ class AUHandler(BeautifyHandler):
         }[self.variant]
 
     @property
-    def download_url(self) -> str:
-        return {
-            "female": self.urls.au_female,
-            "male": self.urls.au_male,
-            "androgynous": self.urls.au_androgynous,
-        }[self.variant]
+    def asset_pattern(self) -> str:
+        """获取资源文件名模式"""
+        variant_map = {
+            "female": "AUfemale.imgpack",
+            "male": "AUmale.imgpack",
+            "androgynous": "AUandrogynous.imgpack",
+        }
+        return variant_map[self.variant]
 
     def apply(self) -> bool:
         logger.info(f"开始应用美化: {self.name}")
@@ -283,9 +285,20 @@ class AUHandler(BeautifyHandler):
         if (beautify_dir / "body").exists():
             logger.debug(f"使用缓存的 {self.name} 文件")
         else:
+            # 从 GitHub Release 获取最新版本的下载URL
+            from .utils import get_github_release_asset
+
+            download_url = get_github_release_asset(
+                self.urls.au_github_repo, self.asset_pattern
+            )
+
+            if not download_url:
+                logger.error(f"无法获取 {self.name} 的下载URL")
+                return False
+
             # 下载并解压
-            zip_path = beautify_dir / "au.zip"
-            download_file(self.download_url, zip_path, quiet=True)
+            zip_path = beautify_dir / "au_imgpack.zip"
+            download_file(download_url, zip_path, quiet=True)
             logger.debug(f"解压 {self.name} 文件...")
             extract_zip(zip_path, beautify_dir)
             safe_remove(zip_path)

@@ -8,10 +8,8 @@ uber_apk_signer = "https://github.com/patrickfav/uber-apk-signer/releases/downlo
 # DOLP 基础 URL
 dolp_base = "https://gitgud.io/Frostberg/degrees-of-lewdity-plus/-/archive/master/degrees-of-lewdity-plus-master.tar.gz?path=imagepacks"
 
-# AU 系列资源
-au_f = "https://github.com/DoL-Lyra/assets/releases/download/assets/AUfemale.imgpack.zip"
-au_m = "https://github.com/DoL-Lyra/assets/releases/download/assets/AUmale.imgpack.zip"
-au_a = "https://github.com/DoL-Lyra/assets/releases/download/assets/AUandrogynous.imgpack.zip"
+# AU 系列资源（从 GitHub Release 获取）
+au_github_repo = "AOKIUTAGE/UTAGEsDOL3.0"
 
 [paths]
 # 工作目录

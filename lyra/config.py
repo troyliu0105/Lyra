@@ -91,10 +91,8 @@ class ResourceURLs:
     # DoL+ 资源基础URL
     dolp_base: str
 
-    # AU特写资源
-    au_female: str
-    au_male: str
-    au_androgynous: str
+    # AU特写资源 GitHub 仓库
+    au_github_repo: str
 
     def get_dolp_imagepack_url(self, pack_name: str) -> str:
         """获取DoL+图片包的完整URL"""
@@ -109,9 +107,7 @@ class ResourceURLs:
             apktool=config.apktool_url,
             apksign=config.uber_apk_signer_url,
             dolp_base=config.dolp_base_url,
-            au_female=config.au_f_url,
-            au_male=config.au_m_url,
-            au_androgynous=config.au_a_url,
+            au_github_repo=config.au_github_repo,
         )
 
 
