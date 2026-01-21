@@ -436,6 +436,34 @@ def _replace_mod_in_html(html_path: Path, mod_id: int, mod_path: Path):
     replace_mod_by_id(str(html_path), mod_id, str(mod_path))
 
 
+def _patch_html_modloader_code(html_path: Path):
+    """
+    修改HTML文件中ModLoader的JavaScript代码
+    将modReadCache.clone()后添加过滤逻辑
+
+    Args:
+        html_path: HTML文件路径
+    """
+    if not html_path.exists():
+        logger.warning(f"HTML文件不存在: {html_path}")
+        return
+
+    try:
+        content = html_path.read_text(encoding="utf-8")
+
+        old_code = "this.modReadCache.clone();"
+        new_code = "this.modReadCache.clone(); toLoadModeList = await this.filterModCanLoad(toLoadModeList);"
+
+        if old_code in content:
+            content = content.replace(old_code, new_code)
+            html_path.write_text(content, encoding="utf-8")
+            logger.info(f"已修改 {html_path.name} 中的ModLoader代码")
+        else:
+            logger.warning(f"在 {html_path.name} 中未找到目标代码")
+    except Exception as e:
+        logger.error(f"修改 {html_path.name} 失败: {e}")
+
+
 def cmd_prepare_package(args):
     """
     准备游戏包（处理zip和apk）
@@ -538,11 +566,12 @@ def cmd_prepare_package(args):
 
         # ========== 5. 向HTML添加mod ==========
         # 1. 用自定义的ModLoaderGui替换原始ModLoader（ID 0）
-        # 2. 添加其他mod: Cheat, CombatStatusDisplay
-        # 最终mod顺序: ModLoaderGui, Cheat, CombatStatusDisplay
+        # 2. 添加其他mod: ModI18N, Cheat, CombatStatusDisplay
+        # 最终mod顺序: ModLoaderGui, ModI18N, Cheat, CombatStatusDisplay
 
         modloader_gui = extra_mods.get("modloader_gui")
         mods_to_add = [
+            downloaded_files.get("i18n"),
             extra_mods.get("cheat"),
             extra_mods.get("combat_status"),
         ]
@@ -555,6 +584,8 @@ def cmd_prepare_package(args):
                 _replace_mod_in_html(zip_html, 0, modloader_gui)
             # 添加其他mod
             _add_mods_to_html(zip_html, mods_to_add)
+            # 修补ModLoader代码
+            _patch_html_modloader_code(zip_html)
 
         # 处理apk目录中的html
         if apk_extract_dir.exists():
@@ -565,6 +596,8 @@ def cmd_prepare_package(args):
                     _replace_mod_in_html(apk_html, 0, modloader_gui)
                 # 添加其他mod
                 _add_mods_to_html(apk_html, mods_to_add)
+                # 修补ModLoader代码
+                _patch_html_modloader_code(apk_html)
         output_zip = base_dir / f"base{suffix}.zip"
         create_zip(zip_extract_dir, output_zip)
         logger.info(f"ZIP基包已生成: {output_zip}")
