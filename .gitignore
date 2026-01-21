@@ -53,3 +53,4 @@ my.secrets
 .vscode
 DoL-ModLoader*
 tests/
+base/

@@ -2,12 +2,6 @@ name: Trigger
 
 on:
   workflow_dispatch:
-    inputs:
-      trigger_DoLModLoaderBuild:
-        description: "true to trigger DoLModLoaderBuild"
-        type: boolean
-        default: true
-        required: true
 
 env:
   GIT_EMAIL: ${{ secrets.GIT_EMAIL }}
@@ -34,26 +28,6 @@ jobs:
       - name: Check for updates
         id: check
         run: python scripts/ci.py check-update --github-output $GITHUB_OUTPUT -v
-
-      - name: Trigger DoL-Lyra/DoLModLoaderBuild/Update-Submodules.yaml
-        uses: convictional/trigger-workflow-and-wait@v1.6.5
-        if: steps.check.outputs.need_update == 'true' && inputs.trigger_DoLModLoaderBuild
-        with:
-          owner: DoL-Lyra
-          repo: DoLModLoaderBuild
-          ref: master
-          workflow_file_name: Update-Submodules.yaml
-          github_token: ${{ secrets.GH_PAT_LYRA }}
-
-      - name: Trigger DoL-Lyra/DoLModLoaderBuild/Build-Html-Package.yml
-        uses: convictional/trigger-workflow-and-wait@v1.6.5
-        if: steps.check.outputs.need_update == 'true' && inputs.trigger_DoLModLoaderBuild
-        with:
-          owner: DoL-Lyra
-          repo: DoLModLoaderBuild
-          ref: master
-          workflow_file_name: Build-Html-Package.yml
-          github_token: ${{ secrets.GH_PAT_LYRA }}
 
       - name: Create tag
         if: steps.check.outputs.need_update == 'true'

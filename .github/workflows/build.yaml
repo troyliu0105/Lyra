@@ -36,25 +36,14 @@ jobs:
       - name: Install APT packages
         run: sudo apt install -y unrar
 
-      # 下载焊入html的i18n
-      - name: Download game files (zip)
-        uses: robinraju/release-downloader@v1.12
-        with:
-          repository: "DoL-Lyra/DoLModLoaderBuild"
-          latest: true
-          fileName: "DoL-ModLoader-*.zip"
-
-      # 下载汉化仓库的apk
-      - name: Download game files (apk)
-        uses: robinraju/release-downloader@v1.12
-        with:
-          repository: "Eltirosto/Degrees-of-Lewdity-Chinese-Localization"
-          latest: true
-          fileName: "DoL-ModLoader-*-v*[^polyfill].APK"
-
       # 使用Python脚本处理游戏包
       - name: Prepare game packages
-        run: python scripts/ci.py prepare-package --workspace "${{ github.workspace }}" -v
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            python scripts/ci.py prepare-package --workspace "${{ github.workspace }}" --tag "${{ github.ref_name }}" -v
+          else
+            python scripts/ci.py prepare-package --workspace "${{ github.workspace }}" -v
+          fi
 
       - name: Setup signing key
         run: |
@@ -169,7 +158,7 @@ jobs:
     needs: release
     if: github.ref_type == 'tag'
     secrets: inherit
-  
+
   call-deploy-hub:
     uses: DoL-Lyra/hub/.github/workflows/hub-deploy.yaml@main
     needs: release

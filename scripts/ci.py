@@ -19,6 +19,8 @@ from typing import Optional, Tuple
 import fcntl
 import time
 
+from ci_utils import LyraVer, extract_vers_from_string
+
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -165,10 +167,237 @@ def cmd_build(args):
     
     return build_main()
 
+def download_assets_from_chs_repo(workspace: Path, lyra_ver: Optional[LyraVer] = None) -> dict:
+    """
+    从汉化仓库下载必要的资源文件
+    
+    Args:
+        workspace: 工作目录
+        lyra_ver: 版本信息（可选，为None时使用latest release）
+    
+    Returns:
+        下载文件的路径字典
+    """
+    import urllib.request
+    
+    chs_repo = "Eltirosto/Degrees-of-Lewdity-Chinese-Localization"
+    
+    # 确定要获取的release tag
+    if lyra_ver:
+        tag = f"v{lyra_ver.dol_ver}-chs-{lyra_ver.chs_ver}"
+        api_url = f"https://api.github.com/repos/{chs_repo}/releases/tags/{tag}"
+        logger.info(f"从指定tag下载: {tag}")
+    else:
+        api_url = f"https://api.github.com/repos/{chs_repo}/releases/latest"
+        logger.info("从latest release下载")
+    
+    # 获取release信息
+    try:
+        req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req) as response:
+            release_data = json.loads(response.read().decode())
+    except Exception as e:
+        logger.error(f"获取release信息失败: {e}")
+        raise
+    
+    # 定义需要下载的文件模式（排除polyfill.APK）
+    required_patterns = [
+        ("apk", lambda name: name.endswith(".APK") and "polyfill" not in name.lower()),
+        ("zip", lambda name: name.endswith(".zip") and "ModLoader" in name and "polyfill" not in name.lower()),
+        ("polyfill_zip", lambda name: name.endswith(".zip") and "polyfill" in name.lower()),
+        ("image_pack", lambda name: "GameOriginalImagePack" in name and name.endswith(".zip")),
+        ("i18n", lambda name: "ModI18N" in name and name.endswith(".zip")),
+    ]
+    
+    # 从release assets中筛选需要的文件
+    assets_to_download = {}
+    for asset in release_data.get('assets', []):
+        name = asset['name']
+        url = asset['browser_download_url']
+        
+        for key, matcher in required_patterns:
+            if matcher(name) and key not in assets_to_download:
+                assets_to_download[key] = {'name': name, 'url': url}
+                break
+    
+    # 检查是否找到所有必需文件
+    missing = [key for key, _ in required_patterns if key not in assets_to_download]
+    if missing:
+        logger.warning(f"未找到部分文件: {missing}")
+    
+    # 下载文件
+    downloaded_files = {}
+    for key, asset_info in assets_to_download.items():
+        dest_path = workspace / asset_info['name']
+        logger.info(f"下载 {key}: {asset_info['name']}")
+        download_file(asset_info['url'], dest_path)
+        downloaded_files[key] = dest_path
+    
+    return downloaded_files
+
+
+def prepare_game_sources(workspace: Path, downloaded_files: dict, prepare_dir: Path) -> Tuple[Optional[Path], Optional[Path], Optional[Path]]:
+    """
+    准备游戏源文件：解压并合并资源
+    
+    Args:
+        workspace: 工作目录
+        downloaded_files: 下载的文件路径字典
+        prepare_dir: 准备目录
+    
+    Returns:
+        (normal_zip_dir, polyfill_zip_dir, apk_extract_dir) 解压后的目录路径
+    """
+    normal_zip_dir = None
+    polyfill_zip_dir = None
+    apk_extract_dir = None
+    
+    # 解压GameOriginalImagePack获取img目录
+    image_pack_dir = None
+    if 'image_pack' in downloaded_files:
+        image_pack_dir = prepare_dir / "image_pack_temp"
+        if image_pack_dir.exists():
+            safe_remove(image_pack_dir)
+        extract_zip(downloaded_files['image_pack'], image_pack_dir)
+        logger.info(f"已解压图片包到: {image_pack_dir}")
+    
+    # 解压普通版zip
+    if 'zip' in downloaded_files:
+        normal_zip_dir = prepare_dir / "zip"
+        if normal_zip_dir.exists():
+            safe_remove(normal_zip_dir)
+        extract_zip(downloaded_files['zip'], normal_zip_dir)
+        logger.info(f"已解压普通版zip到: {normal_zip_dir}")
+        
+        # 合并img
+        if image_pack_dir:
+            _merge_image_pack(image_pack_dir, normal_zip_dir)
+    
+    # 解压polyfill版zip
+    if 'polyfill_zip' in downloaded_files:
+        polyfill_zip_dir = prepare_dir / "zip-polyfill"
+        if polyfill_zip_dir.exists():
+            safe_remove(polyfill_zip_dir)
+        extract_zip(downloaded_files['polyfill_zip'], polyfill_zip_dir)
+        logger.info(f"已解压polyfill版zip到: {polyfill_zip_dir}")
+        
+        # 合并img
+        if image_pack_dir:
+            _merge_image_pack(image_pack_dir, polyfill_zip_dir)
+    
+    # 解压APK（使用apktool）
+    if 'apk' in downloaded_files:
+        apk_extract_dir = prepare_dir / "apk"
+        # APK解压在后续流程中处理，这里只返回预期路径
+    
+    # 清理临时目录
+    if image_pack_dir and image_pack_dir.exists():
+        safe_remove(image_pack_dir)
+    
+    return normal_zip_dir, polyfill_zip_dir, apk_extract_dir
+
+
+def _merge_image_pack(image_pack_dir: Path, target_dir: Path):
+    """将图片包的img目录合并到目标目录"""
+    # 查找img目录（可能在子目录中）
+    img_src = None
+    if (image_pack_dir / "img").exists():
+        img_src = image_pack_dir / "img"
+    else:
+        # 搜索子目录
+        for subdir in image_pack_dir.iterdir():
+            if subdir.is_dir() and (subdir / "img").exists():
+                img_src = subdir / "img"
+                break
+    
+    if img_src:
+        img_dst = target_dir / "img"
+        copy_directory(img_src, img_dst)
+        logger.debug(f"已合并图片包到: {img_dst}")
+    else:
+        logger.warning(f"在图片包中未找到img目录: {image_pack_dir}")
+
+
+def download_extra_mods(workspace: Path) -> dict:
+    """
+    从额外的仓库下载mod文件
+    
+    Args:
+        workspace: 工作目录
+    
+    Returns:
+        下载的mod文件路径字典
+    """
+    import urllib.request
+    
+    extra_repos = [
+        ("cheat", "DoL-Lyra/Cheat"),
+        ("combat_status", "DoL-Lyra/CombatStatusDisplay"),
+    ]
+    
+    downloaded_mods = {}
+    
+    for key, repo in extra_repos:
+        api_url = f"https://api.github.com/repos/{repo}/releases/latest"
+        logger.info(f"从 {repo} 下载mod...")
+        
+        try:
+            req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req) as response:
+                release_data = json.loads(response.read().decode())
+        except Exception as e:
+            logger.error(f"获取 {repo} release信息失败: {e}")
+            continue
+        
+        # 查找mod.zip文件
+        for asset in release_data.get('assets', []):
+            name = asset['name']
+            if name.endswith('.mod.zip') or name == 'mod.zip':
+                url = asset['browser_download_url']
+                # 使用仓库名作为文件名前缀避免冲突
+                dest_name = f"{repo.split('/')[1]}.mod.zip"
+                dest_path = workspace / dest_name
+                logger.info(f"下载 {key}: {name} -> {dest_name}")
+                download_file(url, dest_path)
+                downloaded_mods[key] = dest_path
+                break
+        else:
+            logger.warning(f"在 {repo} 中未找到mod.zip文件")
+    
+    return downloaded_mods
+
+
+def _add_mods_to_html(html_path: Path, mod_paths: list):
+    """
+    向HTML文件添加mod
+    
+    Args:
+        html_path: HTML文件路径
+        mod_paths: mod文件路径列表（按加载顺序）
+    """
+    from scripts.modmagic import add_mods_to_html
+    
+    # 过滤存在的mod文件
+    existing_mods = [str(p) for p in mod_paths if p and p.exists()]
+    
+    if not existing_mods:
+        logger.warning(f"没有可添加的mod文件")
+        return
+    
+    logger.info(f"向 {html_path.name} 添加 {len(existing_mods)} 个mod...")
+    add_mods_to_html(str(html_path), existing_mods, position="end")
+
+
 
 def cmd_prepare_package(args):
     """
     准备游戏包（处理zip和apk）
+    
+    流程:
+    1. 从汉化仓库下载源文件（zip、apk、polyfill、图片包、i18n）
+    2. 解压并合并图片包
+    3. 处理APK（反编译、修改配置）
+    4. 生成基包
     
     输出结构:
     - workspace/base/base.zip, base-polyfill.zip  # ZIP基包
@@ -176,6 +405,8 @@ def cmd_prepare_package(args):
     - workspace/prepare_package/apk, apk-polyfill  # 已解包的APK目录（供后续复用）
     """
     setup_logging(args.verbose)
+    
+    lyra_ver = extract_vers_from_string(args.tag) if args.tag else None
     
     # 加载配置
     build_config = load_build_config()
@@ -188,38 +419,52 @@ def cmd_prepare_package(args):
     base_dir.mkdir(parents=True, exist_ok=True)
     prepare_dir.mkdir(parents=True, exist_ok=True)
     
-    # 下载apktool
+    # ========== 1. 下载源文件 ==========
+    logger.info("========== 下载源文件 ==========")
+    downloaded_files = download_assets_from_chs_repo(workspace, lyra_ver)
+    
+    if not downloaded_files:
+        logger.error("未能下载任何文件")
+        return 1
+    
+    # 下载额外的mod文件（Cheat, CombatStatusDisplay）
+    extra_mods = download_extra_mods(workspace)
+    
+    # ========== 2. 解压并合并图片包 ==========
+    logger.info("========== 解压源文件 ==========")
+    normal_zip_dir, polyfill_zip_dir, _ = prepare_game_sources(
+        workspace, downloaded_files, prepare_dir
+    )
+    
+    # ========== 3. 下载apktool ==========
     apktool_url = "https://github.com/iBotPeaches/Apktool/releases/download/v2.12.0/apktool_2.12.0.jar"
     apktool_path = workspace / "apktool.jar"
     download_file(apktool_url, apktool_path)
     
-    # 查找源文件
-    zip_files = list(workspace.glob("DoL*.zip"))
-    normal_zip = next((f for f in zip_files if "polyfill" not in f.name.lower()), None)
-    polyfill_zip = next((f for f in zip_files if "polyfill" in f.name.lower()), None)
+    # ========== 4. 处理游戏包 ==========
+    logger.info("========== 处理游戏包 ==========")
     
-    apk_files = list(workspace.glob("DoL*.APK")) + list(workspace.glob("DoL*.apk"))
-    apk_file = apk_files[0] if apk_files else None
+    # 获取APK文件
+    apk_file = downloaded_files.get('apk')
     
     # 记录基包名称（用于后续构建）
     base_names = {}
     
-    for zip_file, is_polyfill in [(normal_zip, False), (polyfill_zip, True)]:
-        if not zip_file:
-            continue
-        
+    # 处理版本列表：(zip目录, 是否polyfill, 原始文件路径)
+    versions_to_process = []
+    if normal_zip_dir and normal_zip_dir.exists():
+        versions_to_process.append((normal_zip_dir, False, downloaded_files.get('zip')))
+    if polyfill_zip_dir and polyfill_zip_dir.exists():
+        versions_to_process.append((polyfill_zip_dir, True, downloaded_files.get('polyfill_zip')))
+    
+    for zip_extract_dir, is_polyfill, source_file in versions_to_process:
         label = "polyfill" if is_polyfill else "normal"
         suffix = "-polyfill" if is_polyfill else ""
-        logger.info(f"处理{label}版本: {zip_file.name}")
+        logger.info(f"处理{label}版本")
         
         # 记录原始文件名（用于后续生成输出文件名）
-        base_names[label] = zip_file.stem
-        
-        # 解压zip到临时目录
-        zip_extract_dir = prepare_dir / f"zip{suffix}"
-        if zip_extract_dir.exists():
-            safe_remove(zip_extract_dir)
-        extract_zip(zip_file, zip_extract_dir)
+        if source_file:
+            base_names[label] = source_file.stem
         
         # 设置APK解包目录（每个版本独立）
         apk_extract_dir = prepare_dir / f"apk{suffix}"
@@ -233,38 +478,28 @@ def cmd_prepare_package(args):
                 "-o", str(apk_extract_dir)
             ])
             
-            # 从配置文件加载 APK 替换规则
-            build_config = load_build_config()
-            
-            # 按文件分组替换规则
-            file_replacements = {}
-            for replacement in build_config.apk_replacements:
-                if replacement.file not in file_replacements:
-                    file_replacements[replacement.file] = []
-                file_replacements[replacement.file].append(replacement)
-            
-            # 应用替换规则
-            for file_path, replacements in file_replacements.items():
-                target_path = apk_extract_dir / file_path
-                if target_path.exists():
-                    content = target_path.read_text(encoding='utf-8')
-                    for r in replacements:
-                        content = content.replace(r.pattern, r.replacement)
-                    target_path.write_text(content, encoding='utf-8')
-                    logger.debug(f"{file_path}已修改")
+            # 应用APK替换规则
+            _apply_apk_replacements(apk_extract_dir, build_config)
         
-        # 将zip的img和html覆盖到apk中
+        # ========== 5. 向HTML添加mod ==========
+        # 按顺序添加: ModI18N, Cheat, CombatStatusDisplay
+        mod_list = [
+            downloaded_files.get('i18n'),
+            extra_mods.get('cheat'),
+            extra_mods.get('combat_status'),
+        ]
+        
+        # 处理zip目录中的html
+        zip_html = zip_extract_dir / "Degrees of Lewdity.html"
+        if zip_html.exists():
+            _add_mods_to_html(zip_html, mod_list)
+        
+        # 处理apk目录中的html
         if apk_extract_dir.exists():
-            zip_img = zip_extract_dir / "img"
-            apk_img = apk_extract_dir / "assets" / "www" / "img"
-            if zip_img.exists():
-                copy_directory(zip_img, apk_img)
-            
-            zip_html = zip_extract_dir / "Degrees of Lewdity.html"
             apk_html = apk_extract_dir / "assets" / "www" / "index.html"
-            if zip_html.exists():
-                shutil.copy2(zip_html, apk_html)
-                apply_android_save_patch(apk_html)
+            if apk_html.exists():
+                _add_mods_to_html(apk_html, mod_list)
+
         
         # 输出ZIP基包到base目录
         output_zip = base_dir / f"base{suffix}.zip"
@@ -287,15 +522,34 @@ def cmd_prepare_package(args):
     # 保存基包名称映射（供后续构建使用）
     if base_names:
         names_file = base_dir / "names.json"
-        import json
         with open(names_file, 'w', encoding='utf-8') as f:
             json.dump(base_names, f, indent=2)
         logger.info(f"基包名称映射已保存: {names_file}")
     
-    logger.info("包处理完成")
+    logger.info("========== 包处理完成 ==========")
     logger.info(f"  ZIP基包目录: {base_dir}")
     logger.info(f"  APK解包目录: {prepare_dir}")
     return 0
+
+
+def _apply_apk_replacements(apk_extract_dir: Path, build_config: BuildConfig):
+    """应用APK配置替换规则"""
+    # 按文件分组替换规则
+    file_replacements = {}
+    for replacement in build_config.apk_replacements:
+        if replacement.file not in file_replacements:
+            file_replacements[replacement.file] = []
+        file_replacements[replacement.file].append(replacement)
+    
+    # 应用替换规则
+    for file_path, replacements in file_replacements.items():
+        target_path = apk_extract_dir / file_path
+        if target_path.exists():
+            content = target_path.read_text(encoding='utf-8')
+            for r in replacements:
+                content = content.replace(r.pattern, r.replacement)
+            target_path.write_text(content, encoding='utf-8')
+            logger.debug(f"{file_path}已修改")
 
 
 def cmd_build_all(args):
@@ -331,18 +585,11 @@ def cmd_build_all(args):
     
     if args.tag:
         # tag 格式: v0.5.7.9-5.0.2a-0112
-        tag_str = args.tag
-        if tag_str.startswith('v'):
-            tag_str = tag_str[1:]
-        
-        parts = tag_str.split('-')
-        if len(parts) >= 3:
-            dol_version = parts[0]  # 0.5.7.9
-            chs_version = parts[1]  # 5.0.2a
-            date_param = parts[2]   # 0112
-            logger.info(f"从tag解析版本: DoL={dol_version}, Chs={chs_version}, Date={date_param}")
-        else:
-            logger.warning(f"tag格式不正确: {args.tag}，应为 v0.5.7.9-5.0.2a-0112")
+        lyra_ver = extract_vers_from_string(args.tag)
+        dol_version = lyra_ver.dol_ver
+        chs_version = lyra_ver.chs_ver
+        date_param = lyra_ver.date
+        logger.info(f"从tag解析版本: DoL={dol_version}, Chs={chs_version}, Date={date_param}")
     
     # 获取所有构建代码
     calculator = CombinationCalculator()
@@ -660,6 +907,7 @@ def main():
     # prepare-package 命令
     prep_parser = subparsers.add_parser('prepare-package', help='准备游戏包')
     prep_parser.add_argument('--workspace', default='.')
+    prep_parser.add_argument('--tag', help='tag参数（格式如 v0.5.7.9-5.0.2a-0112，用于指定版本和日期）')
     prep_parser.add_argument('-v', '--verbose', action='store_true')
     
     # build-all 命令
