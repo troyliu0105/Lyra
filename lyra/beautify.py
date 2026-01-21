@@ -289,7 +289,7 @@ class AUHandler(BeautifyHandler):
             from .utils import get_github_release_asset
 
             download_url = get_github_release_asset(
-                self.urls.au_github_repo, self.asset_pattern
+                self.urls.au_github_repo, self.asset_pattern, tag="mod"
             )
 
             if not download_url:

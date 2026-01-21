@@ -297,7 +297,7 @@ def parse_version_from_filename(filename: str) -> tuple[str, str]:
 
 
 def get_github_release_asset(
-    repo: str, asset_pattern: str, prefer_latest: bool = True
+    repo: str, asset_pattern: str, tag: str = "latest"
 ) -> Optional[str]:
     """
     从 GitHub Release 获取资源下载URL
@@ -305,13 +305,16 @@ def get_github_release_asset(
     Args:
         repo: 仓库名称，格式为 "owner/repo"
         asset_pattern: 资源文件名模式（用于匹配）
-        prefer_latest: 是否优先使用最新版本
+        tag: release tag，默认为 "latest" 获取最新版本
 
     Returns:
         资源下载URL，未找到返回None
     """
     try:
-        api_url = f"https://api.github.com/repos/{repo}/releases/latest"
+        if tag == "latest":
+            api_url = f"https://api.github.com/repos/{repo}/releases/latest"
+        else:
+            api_url = f"https://api.github.com/repos/{repo}/releases/tags/{tag}"
         logger.debug(f"获取 GitHub Release 信息: {api_url}")
 
         response = requests.get(api_url, timeout=10)
