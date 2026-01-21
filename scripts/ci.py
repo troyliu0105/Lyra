@@ -8,31 +8,22 @@ GitHub Actions 辅助脚本
 import argparse
 import json
 import logging
-import os
-import shutil
-import subprocess
 import sys
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional, Tuple
 import fcntl
-import time
 
 from ci_utils import LyraVer, extract_vers_from_string
 
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from lyra.config import BuildConfig, ModCode
+from lyra.config import BuildConfig
 from lyra.config_loader import load_build_config
-from lyra.builder import create_builder
-from lyra.combo import CombinationCalculator, get_default_build_codes
-from lyra.gen_page import (
-    DownloadPageConfig,
-    DownloadPageGenerator,
-    generate_download_page,
-)
+from lyra.combo import CombinationCalculator
+from lyra.gen_page import generate_download_page
 from lyra.utils import (
     setup_logging,
     download_file,
@@ -41,8 +32,6 @@ from lyra.utils import (
     copy_directory,
     safe_remove,
     run_command,
-    find_game_file,
-    apply_android_save_patch,
 )
 
 logger = logging.getLogger(__name__)
@@ -372,6 +361,7 @@ def download_extra_mods(workspace: Path) -> dict:
     extra_repos = [
         ("cheat", "DoL-Lyra/Cheat"),
         ("combat_status", "DoL-Lyra/CombatStatusDisplay"),
+        ("modloader_gui", "DoL-Lyra/sugarcube-2-ModLoaderGui"),
     ]
 
     downloaded_mods = {}
@@ -425,6 +415,25 @@ def _add_mods_to_html(html_path: Path, mod_paths: list):
 
     logger.info(f"向 {html_path.name} 添加 {len(existing_mods)} 个mod...")
     add_mods_to_html(str(html_path), existing_mods, position="end")
+
+
+def _replace_mod_in_html(html_path: Path, mod_id: int, mod_path: Path):
+    """
+    替换HTML文件中指定ID的mod
+
+    Args:
+        html_path: HTML文件路径
+        mod_id: 要替换的mod ID
+        mod_path: 新mod文件路径
+    """
+    from scripts.modmagic import replace_mod_by_id
+
+    if not mod_path or not mod_path.exists():
+        logger.warning(f"替换mod文件不存在: {mod_path}")
+        return
+
+    logger.info(f"替换 {html_path.name} 的mod ID {mod_id}为: {mod_path.name}")
+    replace_mod_by_id(str(html_path), mod_id, str(mod_path))
 
 
 def cmd_prepare_package(args):
@@ -528,9 +537,12 @@ def cmd_prepare_package(args):
             _apply_apk_replacements(apk_extract_dir, build_config)
 
         # ========== 5. 向HTML添加mod ==========
-        # 按顺序添加: ModI18N, Cheat, CombatStatusDisplay
-        mod_list = [
-            downloaded_files.get("i18n"),
+        # 1. 用自定义的ModLoaderGui替换原始ModLoader（ID 0）
+        # 2. 添加其他mod: Cheat, CombatStatusDisplay
+        # 最终mod顺序: ModLoaderGui, Cheat, CombatStatusDisplay
+
+        modloader_gui = extra_mods.get("modloader_gui")
+        mods_to_add = [
             extra_mods.get("cheat"),
             extra_mods.get("combat_status"),
         ]
@@ -538,15 +550,21 @@ def cmd_prepare_package(args):
         # 处理zip目录中的html
         zip_html = zip_extract_dir / "Degrees of Lewdity.html"
         if zip_html.exists():
-            _add_mods_to_html(zip_html, mod_list)
+            # 替换ModLoader为自定义GUI版本
+            if modloader_gui:
+                _replace_mod_in_html(zip_html, 0, modloader_gui)
+            # 添加其他mod
+            _add_mods_to_html(zip_html, mods_to_add)
 
         # 处理apk目录中的html
         if apk_extract_dir.exists():
             apk_html = apk_extract_dir / "assets" / "www" / "index.html"
             if apk_html.exists():
-                _add_mods_to_html(apk_html, mod_list)
-
-        # 输出ZIP基包到base目录
+                # 替换ModLoader为自定义GUI版本
+                if modloader_gui:
+                    _replace_mod_in_html(apk_html, 0, modloader_gui)
+                # 添加其他mod
+                _add_mods_to_html(apk_html, mods_to_add)
         output_zip = base_dir / f"base{suffix}.zip"
         create_zip(zip_extract_dir, output_zip)
         logger.info(f"ZIP基包已生成: {output_zip}")
