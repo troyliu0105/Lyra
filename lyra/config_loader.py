@@ -119,7 +119,6 @@ class BuildConfiguration:
     au_a_url: str
 
     # Paths
-    android_save_patch: str
     workspace_dir: str
     output_dir: str
     extract_dir: str
@@ -161,7 +160,6 @@ class BuildConfiguration:
             au_f_url=urls["au_f"],
             au_m_url=urls["au_m"],
             au_a_url=urls["au_a"],
-            android_save_patch=paths["android_save_patch"],
             workspace_dir=paths["workspace"],
             output_dir=paths["output"],
             extract_dir=paths["extract"],

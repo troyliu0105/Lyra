@@ -513,7 +513,6 @@ au_m = "https://github.com/.../AUmale.imgpack.zip"
 au_a = "https://github.com/.../AUandrogynous.imgpack.zip"
 
 [paths]
-android_save_patch = "patches/0001-dol-android-save-to-file.patch"
 workspace = "workspace"
 output = "output"
 

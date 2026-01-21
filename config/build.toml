@@ -14,9 +14,6 @@ au_m = "https://github.com/DoL-Lyra/assets/releases/download/assets/AUmale.imgpa
 au_a = "https://github.com/DoL-Lyra/assets/releases/download/assets/AUandrogynous.imgpack.zip"
 
 [paths]
-# 补丁文件路径
-android_save_patch = "patches/0001-dol-android-save-to-file.patch"
-
 # 工作目录
 workspace = "workspace"
 output = "output"
