@@ -332,7 +332,8 @@ def main():
 
 
 def print_help():
-    print("""
+    print(
+        """
 modifyModList.py - 修改已有的 .mod.html 文件中的 Mod 列表
 
 用法:
@@ -357,9 +358,9 @@ modifyModList.py - 修改已有的 .mod.html 文件中的 Mod 列表
   python modifyModList.py replace test.html.mod.html 0 new_mod.zip
   python modifyModList.py reorder test.html.mod.html 2 0 1
   python modifyModList.py remove test.html.mod.html 0 2
-""")
+"""
+    )
 
 
 if __name__ == "__main__":
     main()
-
