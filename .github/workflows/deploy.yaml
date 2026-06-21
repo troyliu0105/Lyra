@@ -3,8 +3,23 @@ name: Deploy Online
 on:
   # release:
   #   types: [released]
+  # 每 6 小时检查上游 DoL-Lyra/Lyra 的最新 release 并自动重建部署。
+  # GitHub 仅在默认分支上调度定时 workflow；vega 是本仓默认分支。
+  schedule:
+    - cron: "17 */6 * * *"
   workflow_dispatch:
   workflow_call:
+
+# crazy-max/ghaction-github-pages 需要 contents: write 以强推 gh-pages。
+# 本仓 Actions 权限已为 write，此处显式声明以满足组合调用场景。
+permissions:
+  contents: write
+
+# 定时与手动触发可能并发，强制串行化以避免 gh-pages 推送竞争。
+# 每次 deploy 是全量重建 (keep_history: false)，取消进行中的运行是安全的。
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: true
 
 env:
   DOWNLOAD_RELEASE_TEMP_PATH: ${{ github.workspace }}/modloader-temp
@@ -50,13 +65,16 @@ jobs:
       - name: Extract downloaded file
         run: |
           echo "Downloaded DoL: ${{ steps.getRelease.outputs.tag_name }}"
-          unzip -q ${{ fromJson(steps.getRelease.outputs.downloaded_files)[0] }} -d ${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}
-          mv "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/Degrees of Lewdity.html" "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/dol.html"
+          # 将普通模式与兼容模式解压到各自子目录，避免 polyfill 的 besc 图片
+          # 以 unzip -qo 覆写 normal 的 goose 图片（历史 bug：254 个 PNG 被损坏）。
+          mkdir -p "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/normal"
+          unzip -q ${{ fromJson(steps.getRelease.outputs.downloaded_files)[0] }} -d "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/normal"
+          mv "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/normal/Degrees of Lewdity.html" "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/normal/dol.html"
 
           echo "Downloaded DoL Polyfill: ${{ steps.getRelease-polyfill.outputs.tag_name }}"
-          # unzip with overwrite
-          unzip -qo ${{ fromJson(steps.getRelease-polyfill.outputs.downloaded_files)[0] }} -d ${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}
-          mv "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/Degrees of Lewdity.html" "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/dol-polyfill.html"
+          mkdir -p "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/polyfill"
+          unzip -q ${{ fromJson(steps.getRelease-polyfill.outputs.downloaded_files)[0] }} -d "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/polyfill"
+          mv "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/polyfill/Degrees of Lewdity.html" "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/polyfill/dol-polyfill.html"
       - name: Extract DoL version
         id: dolVersion
         shell: python3 {0}
@@ -100,19 +118,31 @@ jobs:
               for p in sorted(pathlib.Path(ext_dir).glob("*.mod.zip")):
                   ext_payloads.append(base64.b64encode(p.read_bytes()).decode("ascii"))
           for html_name, manifest_name in zip(
-            ["${{ env.MODLOADER_HTML_NORMAL_FILENAME }}", "${{ env.MODLOADER_HTML_POLYFILL_FILENAME }}"],
+            ["normal/${{ env.MODLOADER_HTML_NORMAL_FILENAME }}", "polyfill/${{ env.MODLOADER_HTML_POLYFILL_FILENAME }}"],
             ["${{ env.MANIFEST_JSON_NORMAL_FILENAME }}", "${{ env.MANIFEST_JSON_POLYFILL_FILENAME }}"]
           ):
             with open(f"${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/{html_name}", "r+", encoding="utf-8") as index_html_file:
               index_html = index_html_file.read()
-              insert_index = index_html.find('<meta charset="UTF-8" />')
+              # DoL HTML 实际为 <meta charset="UTF-8"> (无自闭合斜杠)；
+              # 旧代码查找 '<meta charset="UTF-8" />' 会返回 -1 并把 manifest 注入到文件末尾，
+              # 产生畸形 HTML。此处匹配真实标记并在缺失时立即报错，避免静默损坏。
+              for marker in ('<meta charset="UTF-8">', '<meta charset="UTF-8" />'):
+                  insert_index = index_html.find(marker)
+                  if insert_index != -1:
+                      break
+              if insert_index == -1:
+                  raise SystemExit(f"charset injection marker not found in {html_name}")
               index_html = index_html[:insert_index] + \
-                  f"<link rel=\"manifest\" href=\"{manifest_name}\">\n" + index_html[insert_index:]
-              insert_index = index_html.find('<body>\n\t<div id="init-screen">') + 7
+                  f"<link rel=\"manifest\" href=\"../{manifest_name}\">\n" + index_html[insert_index:]
+              init_marker = '<body>\n\t<div id="init-screen">'
+              init_found = index_html.find(init_marker)
+              if init_found == -1:
+                  raise SystemExit(f"init-screen injection marker not found in {html_name}")
+              insert_index = init_found + 7
               index_html = index_html[:insert_index] + \
                   "    <script>\n" + \
                   "        if (typeof navigator.serviceWorker !== 'undefined') {\n" + \
-                  "            navigator.serviceWorker.register('sw.js')\n" + \
+                  "            navigator.serviceWorker.register('../sw.js')\n" + \
                   "        }\n" + \
                   "    </script>\n" + index_html[insert_index:]
               if ext_payloads:
