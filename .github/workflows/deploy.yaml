@@ -33,12 +33,16 @@ jobs:
         uses: robinraju/release-downloader@v1
         with:
           latest: true
+          # Fork 仓库本身没有 release，从上游 DoL-Lyra/Lyra 拉取构建产物。
+          repository: DoL-Lyra/Lyra
           fileName: "DoL-*-Lyra-*-goose-ucb-[0-9]*.zip"
       - id: getRelease-polyfill
         name: release-downloader
         uses: robinraju/release-downloader@v1
         with:
           latest: true
+          # Fork 仓库本身没有 release，从上游 DoL-Lyra/Lyra 拉取构建产物。
+          repository: DoL-Lyra/Lyra
           # Polyfill (兼容模式) 固定为 besc 组合 (config/combinations.toml: polyfill.code=3)；
           # 上游不构建 polyfill-goose-ucb 产物，故 polyfill 轨道沿用 besc。
           fileName: "DoL-*-Lyra-*-polyfill-besc-*.zip"
