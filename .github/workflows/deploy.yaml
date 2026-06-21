@@ -204,6 +204,12 @@ jobs:
 
       - name: Remove gitignore from img
         run: |
+          # 上游 DoL zip 内 img/.gitignore 以 **/*.png 等规则忽略所有图片资源。
+          # crazy-max/ghaction-github-pages 通过 git 提交，若不删除这些 .gitignore，
+          # 所有图片都会被丢弃，线上站点只剩 HTML。普通/兼容模式各自位于子目录，
+          # 需分别清理；同时兜底清理根目录的遗留 .gitignore。
+          rm -f ./modloader-temp/normal/img/.gitignore
+          rm -f ./modloader-temp/polyfill/img/.gitignore
           rm -f ./modloader-temp/img/.gitignore
 
       - name: Deploy to GitHub Pages
