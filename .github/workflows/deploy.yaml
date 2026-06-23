@@ -144,6 +144,11 @@ jobs:
                   "        if (typeof navigator.serviceWorker !== 'undefined') {\n" + \
                   "            navigator.serviceWorker.register('../sw.js')\n" + \
                   "        }\n" + \
+                  "        // iOS ITP 会对未安装为 PWA 的站点在 7 天无访问后清除 localStorage；\n" + \
+                  "        // SugarCube 存档全部存于 localStorage，请求持久化存储以降低被清风险。\n" + \
+                  "        if (navigator.storage && navigator.storage.persist) {\n" + \
+                  "            navigator.storage.persist().catch(function () {});\n" + \
+                  "        }\n" + \
                   "    </script>\n" + index_html[insert_index:]
               if ext_payloads:
                   m = re.search(r"window\.modDataValueZipList\s*=\s*(\[.*?\]);", index_html, re.DOTALL)
