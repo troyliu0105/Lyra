@@ -97,13 +97,22 @@ jobs:
         run: |
           cp -r .github/pwa/* ${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}
 
-      - name: Download 0.5.8 extensions
+      - name: Download extensions
         id: dlExt
-        if: startsWith(steps.dolVersion.outputs.dol_ver, '0.5.8')
+        if: startsWith(steps.dolVersion.outputs.dol_ver, '0.5.')
         shell: bash
         run: |
           mkdir -p "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/extensions"
-          curl -fsSL -o "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/extensions/maplebirch.mod.zip" "https://github.com/MaplebirchLeaf/SCML-DOL-maplebirchFramework/releases/download/maplebirch-release-v4.1.7/maplebirch-0.5.8.10-v4.1.7.mod.zip"
+          # maplebirch 按 DoL 版本动态匹配 asset；上游为每个 DoL 版本发布专用构建。
+          MAPLEBIRCH_URL=$(curl -fsSL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/MaplebirchLeaf/SCML-DOL-maplebirchFramework/releases/latest" \
+            | python3 -c "import sys,json,os; dv=os.environ['dol_ver']; print(next((a['browser_download_url'] for a in json.load(sys.stdin)['assets'] if f'-{dv}-' in a['name'] and a['name'].endswith('.mod.zip')), ''))")
+          if [ -n "$MAPLEBIRCH_URL" ]; then
+            curl -fsSL -o "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/extensions/maplebirch.mod.zip" "$MAPLEBIRCH_URL"
+          else
+            echo "::warning::maplebirch 无 dol_ver=${dol_ver} 的专用 asset，跳过"
+          fi
+          # GuideToMe / DoLSims 的 asset 不区分 DoL 版本，直接用最新 tag。
           curl -fsSL -o "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/extensions/guidetome.mod.zip" "https://github.com/Ayndpa/DOL-GuideToMe/releases/download/1.1.0/GuideToMe.zip"
           curl -fsSL -o "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/extensions/dolsims.mod.zip" "https://github.com/MissedHeart/Degrees-of-Lewdity-DolSims/releases/download/v0.8.1.6.2/DoLSims.mod.zip"
 
@@ -112,7 +121,7 @@ jobs:
         run: |
           import re, json, base64, os, pathlib
           ext_dir = "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/extensions"
-          inject_ext = os.environ.get("dol_ver", "").startswith("0.5.8") and os.path.isdir(ext_dir)
+          inject_ext = os.environ.get("dol_ver", "").startswith("0.5.") and os.path.isdir(ext_dir)
           ext_payloads = []
           if inject_ext:
               for p in sorted(pathlib.Path(ext_dir).glob("*.mod.zip")):
