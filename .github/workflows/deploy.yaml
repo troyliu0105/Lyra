@@ -48,6 +48,11 @@ jobs:
         uses: robinraju/release-downloader@v1
         with:
           latest: true
+          # 上游 DoL-Lyra/Lyra 把每个新 DoL 版本的 release 标记为 prerelease，
+          # 而 release-downloader 默认走 /releases/latest（跳过 prerelease），
+          # 会导致定时部署长期停留在旧版本。preRelease 让它改走 /releases
+          # 并取最新的 prerelease，从而跟上游最新构建。
+          preRelease: true
           # Fork 仓库本身没有 release，从上游 DoL-Lyra/Lyra 拉取构建产物。
           repository: DoL-Lyra/Lyra
           fileName: "DoL-*-Lyra-*-goose-ucb-[0-9]*.zip"
@@ -56,6 +61,8 @@ jobs:
         uses: robinraju/release-downloader@v1
         with:
           latest: true
+          # 与 getRelease 同步取最新 prerelease，否则 polyfill 轨道会落后一个版本。
+          preRelease: true
           # Fork 仓库本身没有 release，从上游 DoL-Lyra/Lyra 拉取构建产物。
           repository: DoL-Lyra/Lyra
           # Polyfill (兼容模式) 固定为 besc 组合 (config/combinations.toml: polyfill.code=3)；
