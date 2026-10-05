@@ -43,28 +43,41 @@ jobs:
         run: |
           mkdir -p "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}"
 
+      - name: Resolve upstream release
+        id: resolveRelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 上游 DoL-Lyra/Lyra 的 release 时有时被标记为 prerelease、有时不是，
+          # 且 fork 本身没有 release。这里显式取“最新发布”的 tag（按 publishedAt 排序，
+          # 不区分 prerelease），再用显式 tag 下载，避免依赖 release-downloader
+          # 对 /releases/latest 与 prerelease 的取舍语义（latest:true 会跳过 prerelease）。
+          TAG=$(gh release list -R DoL-Lyra/Lyra --limit 30 --json tagName,publishedAt \
+            --jq 'sort_by(.publishedAt) | reverse | .[0].tagName')
+          if [ -z "$TAG" ]; then
+            echo "::error::无法解析上游 DoL-Lyra/Lyra 的 release"
+            exit 1
+          fi
+          echo "resolved upstream tag: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
       - id: getRelease
         name: release-downloader
         uses: robinraju/release-downloader@v1
         with:
-          latest: true
-          # 上游 DoL-Lyra/Lyra 把每个新 DoL 版本的 release 标记为 prerelease，
-          # 而 release-downloader 默认走 /releases/latest（跳过 prerelease），
-          # 会导致定时部署长期停留在旧版本。preRelease 让它改走 /releases
-          # 并取最新的 prerelease，从而跟上游最新构建。
-          preRelease: true
           # Fork 仓库本身没有 release，从上游 DoL-Lyra/Lyra 拉取构建产物。
           repository: DoL-Lyra/Lyra
+          tag: ${{ steps.resolveRelease.outputs.tag }}
           fileName: "DoL-*-Lyra-*-goose-ucb-[0-9]*.zip"
       - id: getRelease-polyfill
         name: release-downloader
         uses: robinraju/release-downloader@v1
         with:
-          latest: true
-          # 与 getRelease 同步取最新 prerelease，否则 polyfill 轨道会落后一个版本。
-          preRelease: true
           # Fork 仓库本身没有 release，从上游 DoL-Lyra/Lyra 拉取构建产物。
           repository: DoL-Lyra/Lyra
+          # 与 getRelease 使用同一 tag，保证两条轨道版本一致。
+          tag: ${{ steps.resolveRelease.outputs.tag }}
           # Polyfill (兼容模式) 固定为 besc 组合 (config/combinations.toml: polyfill.code=3)；
           # 上游不构建 polyfill-goose-ucb 产物，故 polyfill 轨道沿用 besc。
           fileName: "DoL-*-Lyra-*-polyfill-besc-*.zip"
