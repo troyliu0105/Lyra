@@ -8,7 +8,17 @@ on:
   schedule:
     - cron: "17 */6 * * *"
   workflow_dispatch:
+    inputs:
+      force:
+        description: "强制重建（忽略与上次成功部署的指纹比较）"
+        type: boolean
+        default: false
   workflow_call:
+    inputs:
+      force:
+        description: "强制重建（忽略与上次成功部署的指纹比较）"
+        type: boolean
+        default: false
 
 # crazy-max/ghaction-github-pages 需要 contents: write 以强推 gh-pages。
 # 本仓 Actions 权限已为 write，此处显式声明以满足组合调用场景。
@@ -24,6 +34,9 @@ concurrency:
 env:
   DOWNLOAD_RELEASE_TEMP_PATH: ${{ github.workspace }}/modloader-temp
 
+  # 成功部署后写入 build_dir 根目录的指纹文件；下一次运行据此判断是否需要重建。
+  DEPLOY_META_FILENAME: "deploy-meta.json"
+
   MODLOADER_HTML_NORMAL_FILENAME: "dol.html"
   MODLOADER_HTML_POLYFILL_FILENAME: "dol-polyfill.html"
 
@@ -34,8 +47,119 @@ env:
   UPLOAD_ARTIFACT_FILEPATH: ${{ github.workspace }}/Modloader-Artifact.zip
 
 jobs:
+  # 先判断“上游产物 + 本仓注入逻辑”是否与上次成功部署一致；一致则跳过 build/deploy，
+  # 避免每 6 小时重复全量重建并强推 gh-pages。
+  precheck:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      fingerprint: ${{ steps.fingerprint.outputs.fingerprint }}
+      changed: ${{ steps.compare.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Resolve upstream release
+        id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 上游 DoL-Lyra/Lyra 的 release 时有时被标记为 prerelease、有时不是，
+          # 且 fork 本身没有 release。这里显式按 published_at 取“最新发布”的 release
+          # （不区分 prerelease），再用显式 tag 下载，避免依赖 release-downloader
+          # 对 /releases/latest 与 prerelease 的取舍语义（latest:true 会跳过 prerelease）。
+          # release_key 覆盖 tag 与资产清单（名称/摘要/更新时间）：上游重发同名资产也算变化。
+          RELEASE_JSON=$(gh api "repos/DoL-Lyra/Lyra/releases?per_page=30" \
+            --jq 'sort_by(.published_at) | reverse | .[0]')
+          TAG=$(printf '%s' "$RELEASE_JSON" | jq -r '.tag_name // empty')
+          if [ -z "$TAG" ]; then
+            echo "::error::无法解析上游 DoL-Lyra/Lyra 的 release"
+            exit 1
+          fi
+          RELEASE_KEY=$(printf '%s' "$RELEASE_JSON" \
+            | jq -S -c '{tag: .tag_name, updated_at: .updated_at, assets: [.assets[] | {name, digest, updated_at}]}' \
+            | sha256sum | cut -d' ' -f1)
+          echo "resolved upstream tag: $TAG (release key: $RELEASE_KEY)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "release_key=$RELEASE_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Compute build fingerprint
+        id: fingerprint
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          RELEASE_KEY: ${{ steps.resolve.outputs.release_key }}
+        run: |
+          DOL_VER="${TAG#v}"
+          DOL_VER="${DOL_VER%%-*}"
+          # maplebirch 可为同一 DoL 版本重发 asset；用 asset 名 + updated_at 识别内容变化，
+          # 否则同一 tag 下的扩展更新会被误判为“无变化”。
+          MAPLEBIRCH_KEY=""
+          if [[ "$DOL_VER" == 0.5.* ]]; then
+            MAPLEBIRCH_KEY=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/MaplebirchLeaf/SCML-DOL-maplebirchFramework/releases/latest" \
+              | DOL_VER="$DOL_VER" python3 -c "import sys,json,os; dv=os.environ['DOL_VER']; a=next((a for a in json.load(sys.stdin)['assets'] if f'-{dv}-' in a['name'] and a['name'].endswith('.mod.zip')), None); print(f\"{a['name']}@{a.get('updated_at','')}\" if a else '')")
+          fi
+          # 本仓影响发布内容的输入：workflow 自身（注入逻辑、扩展 URL）与 .github/pwa。
+          INPUTS_HASH=$( { sha256sum .github/workflows/deploy.yaml; find .github/pwa -type f -print0 | sort -z | xargs -0 -r sha256sum; } | sha256sum | cut -d' ' -f1 )
+          FP=$(printf '%s\n%s\n%s\n' "$RELEASE_KEY" "$MAPLEBIRCH_KEY" "$INPUTS_HASH" | sha256sum | cut -d' ' -f1)
+          echo "fingerprint inputs: tag=$TAG release=$RELEASE_KEY maplebirch=${MAPLEBIRCH_KEY:-<none>} repo_inputs=$INPUTS_HASH"
+          echo "fingerprint=$FP" >> "$GITHUB_OUTPUT"
+
+      - name: Compare with last successful deploy
+        id: compare
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ inputs.force }}
+          FP: ${{ steps.fingerprint.outputs.fingerprint }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          # 指纹只在 deploy 成功后由 build 写入 gh-pages，并用 Contents API 读取
+          # （避开 raw/CDN 缓存）。首次部署或 gh-pages 不存在时按“需要构建”处理。
+          PREV_FP=""
+          PREV_TAG=""
+          if MARKER=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${DEPLOY_META_FILENAME}?ref=gh-pages" \
+              -H "Accept: application/vnd.github.raw" 2>/dev/null); then
+            PREV_FP=$(printf '%s' "$MARKER" | jq -r '.fingerprint // empty')
+            PREV_TAG=$(printf '%s' "$MARKER" | jq -r '.tag // empty')
+          fi
+
+          CHANGED=true
+          if [ "$FORCE" = "true" ]; then
+            REASON="forced rebuild"
+          elif [ -z "$PREV_FP" ]; then
+            REASON="no previous successful deploy"
+          elif [ "$PREV_FP" = "$FP" ]; then
+            CHANGED=false
+            REASON="fingerprint unchanged since $PREV_TAG"
+          else
+            REASON="fingerprint changed since $PREV_TAG"
+          fi
+
+          echo "changed=$CHANGED"
+          echo "reason=$REASON"
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Deploy precheck"
+            echo ""
+            echo "| item | value |"
+            echo "| --- | --- |"
+            echo "| upstream tag | \`$TAG\` |"
+            echo "| fingerprint | \`$FP\` |"
+            echo "| previous | \`${PREV_TAG:-none}\` / \`${PREV_FP:-none}\` |"
+            echo "| decision | $([ "$CHANGED" = "true" ] && echo 'build' || echo 'skip') |"
+            echo "| reason | $REASON |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$CHANGED" = "false" ]; then
+            echo "::notice::上游产物与部署逻辑均未变化（$PREV_TAG），跳过构建与发布"
+          fi
+
   build:
     runs-on: ubuntu-latest
+    needs: precheck
+    if: needs.precheck.outputs.changed == 'true'
     steps:
       - uses: actions/checkout@v6
 
@@ -43,32 +167,13 @@ jobs:
         run: |
           mkdir -p "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}"
 
-      - name: Resolve upstream release
-        id: resolveRelease
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # 上游 DoL-Lyra/Lyra 的 release 时有时被标记为 prerelease、有时不是，
-          # 且 fork 本身没有 release。这里显式取“最新发布”的 tag（按 publishedAt 排序，
-          # 不区分 prerelease），再用显式 tag 下载，避免依赖 release-downloader
-          # 对 /releases/latest 与 prerelease 的取舍语义（latest:true 会跳过 prerelease）。
-          TAG=$(gh release list -R DoL-Lyra/Lyra --limit 30 --json tagName,publishedAt \
-            --jq 'sort_by(.publishedAt) | reverse | .[0].tagName')
-          if [ -z "$TAG" ]; then
-            echo "::error::无法解析上游 DoL-Lyra/Lyra 的 release"
-            exit 1
-          fi
-          echo "resolved upstream tag: $TAG"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
       - id: getRelease
         name: release-downloader
         uses: robinraju/release-downloader@v1
         with:
           # Fork 仓库本身没有 release，从上游 DoL-Lyra/Lyra 拉取构建产物。
           repository: DoL-Lyra/Lyra
-          tag: ${{ steps.resolveRelease.outputs.tag }}
+          tag: ${{ needs.precheck.outputs.tag }}
           fileName: "DoL-*-Lyra-*-goose-ucb-[0-9]*.zip"
       - id: getRelease-polyfill
         name: release-downloader
@@ -77,7 +182,7 @@ jobs:
           # Fork 仓库本身没有 release，从上游 DoL-Lyra/Lyra 拉取构建产物。
           repository: DoL-Lyra/Lyra
           # 与 getRelease 使用同一 tag，保证两条轨道版本一致。
-          tag: ${{ steps.resolveRelease.outputs.tag }}
+          tag: ${{ needs.precheck.outputs.tag }}
           # Polyfill (兼容模式) 固定为 besc 组合 (config/combinations.toml: polyfill.code=3)；
           # 上游不构建 polyfill-goose-ucb 产物，故 polyfill 轨道沿用 besc。
           fileName: "DoL-*-Lyra-*-polyfill-besc-*.zip"
@@ -194,6 +299,18 @@ jobs:
               index_html_file.truncate()
               index_html_file.write(index_html)
 
+      - name: Write deploy metadata
+        run: |
+          # 该文件随 artifact 一起发布到 gh-pages；precheck 读取它判断是否重复。
+          # 只有 deploy 成功推送后才会更新，失败运行不会污染指纹。
+          jq -n \
+            --arg tag "${{ needs.precheck.outputs.tag }}" \
+            --arg fingerprint "${{ needs.precheck.outputs.fingerprint }}" \
+            --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg workflow_run "${{ github.run_id }}" \
+            '{tag: $tag, fingerprint: $fingerprint, built_at: $built_at, workflow_run: $workflow_run}' \
+            > "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/$DEPLOY_META_FILENAME"
+
       - name: Pack Artifact
         run: |
           7z a ${{ env.UPLOAD_ARTIFACT_FILEPATH }} ${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/*
@@ -204,6 +321,7 @@ jobs:
           name: ${{ env.UPLOAD_ARTIFACT_NAME }}
           path: ${{ env.UPLOAD_ARTIFACT_FILEPATH }}
 
+  # precheck 判定无变化时 build 被跳过，本 job 因 needs 未满足同样跳过，不会重复推送 gh-pages。
   deploy-github:
     runs-on: ubuntu-latest
     needs: build
