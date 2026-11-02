@@ -305,15 +305,15 @@ jobs:
               index_html_file.truncate()
               index_html_file.write(index_html)
 
-          # GitHub 拒绝 >100MB 的单个文件；超限会在 deploy 最后一步才失败，这里提前拦截。
+          # GitHub 拒绝 >100MiB 的单个文件；超限会在 deploy 最后一步才失败，这里提前拦截。
           for html_name in (
             "normal/${{ env.MODLOADER_HTML_NORMAL_FILENAME }}",
             "polyfill/${{ env.MODLOADER_HTML_POLYFILL_FILENAME }}",
           ):
               size = os.path.getsize(f"${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/{html_name}")
-              print(f"{html_name}: {size / 1_000_000:.2f} MB")
-              if size > 99_000_000:
-                  raise SystemExit(f"{html_name} is {size / 1_000_000:.2f} MB, over the 99MB safety limit")
+              print(f"{html_name}: {size / 1_000_000:.2f} MB ({size / 1024 / 1024:.2f} MiB)")
+              if size > 104_000_000:
+                  raise SystemExit(f"{html_name} is {size / 1024 / 1024:.2f} MiB, over the 100MiB safety limit")
 
       - name: Write deploy metadata
         run: |
