@@ -52,7 +52,10 @@ EXTENSIONS = [
     {
         "key": "dolsims",
         "order": 12,
-        "url": "https://github.com/MissedHeart/Degrees-of-Lewdity-DolSims/releases/download/v0.8.1.6.2/DoLSims.mod.zip",
+        # 旧版本 0.8.1.6.2 的 TweeReplacer findString 与 0.5.12.13 文本不匹配（14 处 miss）；
+        # 跟随最新 release 获取针对新版本修正的补丁集。
+        "repo": "MissedHeart/Degrees-of-Lewdity-DolSims",
+        "asset": r"^DoLSims\.mod\.zip$",
     },
     {
         "key": "stonefreehost",
