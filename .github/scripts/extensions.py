@@ -239,7 +239,8 @@ def read_base_registry(path: Path = HTML_PATH):
         name = boot.get("name")
         if name:
             registry[name] = str(boot.get("version", ""))
-    match = re.search(r"get version\(\)\s*\{\s*return\s*'([^']+)'", html)
+    # 上游 HTML 里 ModUtils 的源码以转义换行（字面 \n）嵌入 JS 字符串，需同时接受两种形式。
+    match = re.search(r"get version\s*\(\s*\)\s*(?:\\n|\s)*\{\s*(?:\\n|\s)*return\s*'([^']+)'", html)
     return registry, (match.group(1) if match else None)
 
 

@@ -233,15 +233,33 @@ jobs:
         shell: python3 {0}
         run: |
           import re, json, base64, os, pathlib
-          ext_dir = "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/extensions"
-          inject_ext = os.environ.get("dol_ver", "").startswith("0.5.") and os.path.isdir(ext_dir)
-          ext_payloads = []
-          if inject_ext:
-              for p in sorted(pathlib.Path(ext_dir).glob("*.mod.zip")):
-                  ext_payloads.append(base64.b64encode(p.read_bytes()).decode("ascii"))
-          for html_name, manifest_name in zip(
+          build_dir = pathlib.Path("${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}")
+          ext_dir = build_dir / "extensions"
+          inject_ext = os.environ.get("dol_ver", "").startswith("0.5.") and ext_dir.is_dir()
+          # polyfill 的 HTML 本身已接近 GitHub 100MB 单文件上限（besc 图包更大），
+          # 因此只内嵌历史三个扩展；新增扩展放在 ../extensions/，由 ModLoader 的
+          # remote modList.json 在启动时加载，避免再撑大 HTML。
+          embedded_keys = {"maplebirch", "guidetome", "dolsims"}
+
+          def ext_key(path):
+              return path.name.split("-", 1)[1][: -len(".mod.zip")]
+
+          def payloads(files):
+              return [base64.b64encode(p.read_bytes()).decode("ascii") for p in files]
+
+          ext_files = sorted(ext_dir.glob("*.mod.zip")) if inject_ext else []
+          normal_payloads = payloads(ext_files)
+          polyfill_payloads = payloads([p for p in ext_files if ext_key(p) in embedded_keys])
+          remote_files = [p for p in ext_files if ext_key(p) not in embedded_keys]
+          if remote_files:
+              (build_dir / "polyfill" / "modList.json").write_text(
+                  json.dumps([f"../extensions/{p.name}" for p in remote_files], ensure_ascii=False),
+                  encoding="utf-8",
+              )
+          for html_name, manifest_name, ext_payloads in zip(
             ["normal/${{ env.MODLOADER_HTML_NORMAL_FILENAME }}", "polyfill/${{ env.MODLOADER_HTML_POLYFILL_FILENAME }}"],
-            ["${{ env.MANIFEST_JSON_NORMAL_FILENAME }}", "${{ env.MANIFEST_JSON_POLYFILL_FILENAME }}"]
+            ["${{ env.MANIFEST_JSON_NORMAL_FILENAME }}", "${{ env.MANIFEST_JSON_POLYFILL_FILENAME }}"],
+            [normal_payloads, polyfill_payloads],
           ):
             with open(f"${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/{html_name}", "r+", encoding="utf-8") as index_html_file:
               index_html = index_html_file.read()
@@ -286,6 +304,16 @@ jobs:
               index_html_file.seek(0)
               index_html_file.truncate()
               index_html_file.write(index_html)
+
+          # GitHub 拒绝 >100MB 的单个文件；超限会在 deploy 最后一步才失败，这里提前拦截。
+          for html_name in (
+            "normal/${{ env.MODLOADER_HTML_NORMAL_FILENAME }}",
+            "polyfill/${{ env.MODLOADER_HTML_POLYFILL_FILENAME }}",
+          ):
+              size = os.path.getsize(f"${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/{html_name}")
+              print(f"{html_name}: {size / 1_000_000:.2f} MB")
+              if size > 99_000_000:
+                  raise SystemExit(f"{html_name} is {size / 1_000_000:.2f} MB, over the 99MB safety limit")
 
       - name: Write deploy metadata
         run: |
