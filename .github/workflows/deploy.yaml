@@ -93,18 +93,18 @@ jobs:
         run: |
           DOL_VER="${TAG#v}"
           DOL_VER="${DOL_VER%%-*}"
-          # maplebirch 可为同一 DoL 版本重发 asset；用 asset 名 + updated_at 识别内容变化，
-          # 否则同一 tag 下的扩展更新会被误判为“无变化”。
-          MAPLEBIRCH_KEY=""
+          # 扩展 asset 的身份（名字/updated_at/digest）参与指纹：任一扩展发新版或重发资产
+          # 都会触发重建，而不是等到上游本体换版本。与 build 阶段共用同一份解析逻辑。
           if [[ "$DOL_VER" == 0.5.* ]]; then
-            MAPLEBIRCH_KEY=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-              "https://api.github.com/repos/MaplebirchLeaf/SCML-DOL-maplebirchFramework/releases/latest" \
-              | DOL_VER="$DOL_VER" python3 -c "import sys,json,os; dv=os.environ['DOL_VER']; a=next((a for a in json.load(sys.stdin)['assets'] if f'-{dv}-' in a['name'] and a['name'].endswith('.mod.zip')), None); print(f\"{a['name']}@{a.get('updated_at','')}\" if a else '')")
+            EXT_MANIFEST_HASH=$(DOL_VER="$DOL_VER" python3 .github/scripts/extensions.py --fingerprint \
+              | sha256sum | cut -d' ' -f1)
+          else
+            EXT_MANIFEST_HASH="disabled"
           fi
-          # 本仓影响发布内容的输入：workflow 自身（注入逻辑、扩展 URL）与 .github/pwa。
-          INPUTS_HASH=$( { sha256sum .github/workflows/deploy.yaml; find .github/pwa -type f -print0 | sort -z | xargs -0 -r sha256sum; } | sha256sum | cut -d' ' -f1 )
-          FP=$(printf '%s\n%s\n%s\n' "$RELEASE_KEY" "$MAPLEBIRCH_KEY" "$INPUTS_HASH" | sha256sum | cut -d' ' -f1)
-          echo "fingerprint inputs: tag=$TAG release=$RELEASE_KEY maplebirch=${MAPLEBIRCH_KEY:-<none>} repo_inputs=$INPUTS_HASH"
+          # 本仓影响发布内容的输入：workflow、扩展解析脚本与 .github/pwa。
+          INPUTS_HASH=$( { sha256sum .github/workflows/deploy.yaml .github/scripts/extensions.py; find .github/pwa -type f -print0 | sort -z | xargs -0 -r sha256sum; } | sha256sum | cut -d' ' -f1 )
+          FP=$(printf '%s\n%s\n%s\n' "$RELEASE_KEY" "$EXT_MANIFEST_HASH" "$INPUTS_HASH" | sha256sum | cut -d' ' -f1)
+          echo "fingerprint inputs: tag=$TAG release=$RELEASE_KEY extensions=$EXT_MANIFEST_HASH repo_inputs=$INPUTS_HASH"
           echo "fingerprint=$FP" >> "$GITHUB_OUTPUT"
 
       - name: Compare with last successful deploy
@@ -225,21 +225,9 @@ jobs:
       - name: Download extensions
         id: dlExt
         if: startsWith(steps.dolVersion.outputs.dol_ver, '0.5.')
-        shell: bash
-        run: |
-          mkdir -p "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/extensions"
-          # maplebirch 按 DoL 版本动态匹配 asset；上游为每个 DoL 版本发布专用构建。
-          MAPLEBIRCH_URL=$(curl -fsSL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/MaplebirchLeaf/SCML-DOL-maplebirchFramework/releases/latest" \
-            | python3 -c "import sys,json,os; dv=os.environ['dol_ver']; print(next((a['browser_download_url'] for a in json.load(sys.stdin)['assets'] if f'-{dv}-' in a['name'] and a['name'].endswith('.mod.zip')), ''))")
-          if [ -n "$MAPLEBIRCH_URL" ]; then
-            curl -fsSL -o "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/extensions/maplebirch.mod.zip" "$MAPLEBIRCH_URL"
-          else
-            echo "::warning::maplebirch 无 dol_ver=${dol_ver} 的专用 asset，跳过"
-          fi
-          # GuideToMe / DoLSims 的 asset 不区分 DoL 版本，直接用最新 tag。
-          curl -fsSL -o "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/extensions/guidetome.mod.zip" "https://github.com/Ayndpa/DOL-GuideToMe/releases/download/1.1.0/GuideToMe.zip"
-          curl -fsSL -o "${{ env.DOWNLOAD_RELEASE_TEMP_PATH }}/extensions/dolsims.mod.zip" "https://github.com/MissedHeart/Degrees-of-Lewdity-DolSims/releases/download/v0.8.1.6.2/DoLSims.mod.zip"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/extensions.py
 
       - name: Modify HTML
         shell: python3 {0}
